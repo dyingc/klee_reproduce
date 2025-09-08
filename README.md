@@ -1,8 +1,13 @@
 # KLEE 符号执行实验完整复现指南
 
-- [OSDI'08 Coreutils Experiments](https://klee-se.org/releases/docs/v2.0/docs/coreutils-experiments/)
-- [Tutorial on How to Use KLEE to Test GNU Coreutils](https://klee-se.org/releases/docs/v2.0/tutorials/testing-coreutils/)
+- [OSDI'08 Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)
 - [Using KLEE with Docker](https://klee-se.org/docker/)
+
+** 教程 **
+- [First tutorial](https://klee-se.org/tutorials/testing-function/): 教程演示了如何用 KLEE 测试一个简单函数的基本步骤：把输入做成符号变量，编译成 LLVM 位码，用 KLEE 运行并生成测试用例，然后查看这些用例。
+- [Second tutorial](https://klee-se.org/tutorials/testing-regex/): 教程展示了如何用 KLEE 测试一个简单的正则表达式库：编译成 LLVM 位码，检查生成的符号，运行 KLEE，并观察生成的测试。
+- [Using a symbolic environment](https://klee-se.org/tutorials/using-symbolic/): 本教程通过示例讲解如何使用符号环境，例如将程序的命令行参数和文件作为符号输入，让 KLEE 探索各种可能的执行路径。
+- [Testing Coreutils](https://klee-se.org/tutorials/testing-coreutils/): 教程详细说明了如何使用 KLEE 测试 GNU Coreutils，包括构建带覆盖率的版本、用 WLLVM 生成 LLVM 位码、运行 KLEE 解释这些程序并收集结果。
 
 本文档综合分析了KLEE官方文档的三个关键资源，提供了从环境配置到Coreutils测试的完整实验复现步骤。**优先推荐使用Docker方式，这是当前最简单、最可靠的KLEE使用方法。**
 
@@ -153,23 +158,52 @@ $ ls -l *.bc  # 验证字节码文件生成
 
 ### 步骤2：KLEE符号执行实验
 
-#### 进入 KLEE 容器
+#### 进入 KLEE 容器环境
 ```bash
-./run.sh
+# 构建并启动容器
+$ ./build.sh
+$ ./run.sh
 ```
 
-#### 基础符号执行命令
+#### 准备测试环境
 ```bash
 # 进入字节码目录
 $ cd /home/klee/coreutils-6.11/obj-llvm/src
 
-# 基本KLEE执行（以echo为例）
-$ klee --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
+# 创建沙盒测试环境
+$ mkdir -p /tmp/sandbox
+$ cd /tmp/sandbox
+
+# 创建环境变量文件
+$ cat > test.env << 'EOF'
+PATH=/usr/bin:/bin
+HOME=/tmp/sandbox
+PWD=/tmp/sandbox
+EOF
 ```
 
-#### 优化的KLEE执行命令
+#### 基础符号执行实验
+
+**最简单的符号执行示例（echo工具）：**
 ```bash
-# 使用优化选项获得更好的覆盖率和性能
+$ cd /home/klee/coreutils-6.11/obj-llvm/src
+$ klee --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10
+```
+
+**标准符号参数配置：**
+```bash
+# OSDI'08论文中使用的标准配置
+$ klee --libc=uclibc --posix-runtime \
+    --env-file=/tmp/sandbox/test.env \
+    --run-in-dir=/tmp/sandbox \
+    ./echo.bc \
+    --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
+```
+
+#### 高级符号执行配置
+
+**推荐的优化执行命令：**
+```bash
 $ klee --simplify-sym-indices --write-cvcs --write-cov --output-module \
     --max-memory=1000 --disable-inlining --optimize --use-forked-solver \
     --use-cex-cache --libc=uclibc --posix-runtime \
@@ -179,60 +213,328 @@ $ klee --simplify-sym-indices --write-cvcs --write-cov --output-module \
     --max-static-solve-pct=1 --max-static-cpfork-pct=1 --switch-type=internal \
     --search=random-path --search=nurs:covnew \
     --use-batching-search --batch-instructions=10000 \
+    --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
     ./echo.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
 ```
 
-#### 查看统计信息
+**关键参数详解：**
+- `--libc=uclibc`: 使用uClibc库，提供POSIX兼容性
+- `--posix-runtime`: 启用POSIX运行时环境支持
+- `--optimize`: 启用死代码消除等优化
+- `--only-output-states-covering-new`: 仅输出覆盖新代码的状态
+- `--max-memory=1000`: 限制内存使用（MB）
+- `--max-time=60min`: 设置最大执行时间
+- `--search=random-path`: 使用随机路径搜索策略
+- `--use-batching-search`: 启用批量搜索优化
+
+#### 符号参数策略详解
+
+**符号参数语法：**
 ```bash
-$ klee-stats klee-last
+--sym-args MIN_ARGC MAX_ARGC MAX_ARG_LEN  # 符号命令行参数
+--sym-files N MAX_SIZE                    # N个符号文件，每个最大MAX_SIZE字节
+--sym-stdin MAX_SIZE                      # 符号标准输入，最大MAX_SIZE字节
+--sym-stdout                              # 符号标准输出
 ```
 
-#### 标准符号参数配置
-
-**大多数工具的标准配置：**
+**89个工具的标准配置：**
 ```bash
+# 大多数工具使用的标准配置
 --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
 ```
 
-**特殊工具需要调整的符号参数：**
+**特殊工具的扩展配置：**
 - **dd**: `--sym-args 0 3 10 --sym-files 1 8 --sym-stdin 8 --sym-stdout`
 - **dircolors**: `--sym-args 0 3 10 --sym-files 2 12 --sym-stdin 12 --sym-stdout`
 - **echo**: `--sym-args 0 4 300 --sym-files 2 30 --sym-stdin 30 --sym-stdout`
 - **expr**: `--sym-args 0 1 10 --sym-args 0 3 2 --sym-stdout`
 - **printf**: `--sym-args 0 3 10 --sym-files 2 12 --sym-stdin 12 --sym-stdout`
+- **sort**: 需要添加 `--parallel=1` 参数禁用多线程
+- **ptx**: `--sym-args 0 2 10 --sym-files 2 8 --sym-stdin 8 --sym-stdout`
+- **md5sum**: `--sym-args 0 1 10 --sym-files 2 8`
 
-### 步骤4：结果分析和验证
+#### 实际测试示例
 
-#### 统计信息查看
+**测试echo工具：**
 ```bash
-# 查看KLEE执行统计
+$ klee --libc=uclibc --posix-runtime \
+    --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
+    --max-time=5min --optimize --only-output-states-covering-new \
+    ./echo.bc --sym-args 0 4 300 --sym-files 2 30 --sym-stdin 30 --sym-stdout
+```
+
+**测试sort工具（需要特殊处理）：**
+```bash
+$ klee --libc=uclibc --posix-runtime \
+    --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
+    --max-time=60min --optimize --only-output-states-covering-new \
+    ./sort.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout -- --parallel=1
+```
+
+#### 监控执行进度
+
+**实时查看统计信息：**
+```bash
+# 查看当前执行统计
 $ klee-stats klee-last
 
-# 使用KCachegrind可视化（如果安装）
+# 持续监控（每5秒更新）
+$ watch -n 5 'klee-stats klee-last'
+```
+
+**典型输出示例：**
+```
+------------------------------------------------------------------------------
+|  Path   |  Instrs|  Time(s)|  ICov(%)|  BCov(%)|  ICount|  TSolver(%)|
+------------------------------------------------------------------------------
+|klee-last|   52417|    121.3|    84.25|    65.1 |     204|       48.2 |
+------------------------------------------------------------------------------
+```
+
+### 步骤3：结果分析和验证
+
+#### 基础统计信息分析
+
+**查看执行统计：**
+```bash
+# 基本统计信息
+$ klee-stats klee-last
+
+# 详细统计（包含表格格式）
+$ klee-stats --table-format klee-last
+
+# 比较多个运行结果
+$ klee-stats klee-out-* | sort -n -k 2
+```
+
+**典型统计信息含义：**
+```
+| Path     | Instrs  | Time(s) | ICov(%) | BCov(%) | ICount | TSolver(%) |
+|----------|---------|---------|---------|---------|--------|------------|
+|klee-last | 52417   | 121.3   | 84.25   | 65.1    | 204    | 48.2       |
+```
+- **Instrs**: 执行的LLVM指令数
+- **Time(s)**: 总执行时间
+- **ICov(%)**: 指令覆盖率
+- **BCov(%)**: 分支覆盖率
+- **ICount**: 生成的测试用例数
+- **TSolver(%)**: 约束求解器时间占比
+
+#### 高级可视化分析
+
+**使用KCachegrind进行指令级分析：**
+```bash
+# 生成可视化统计文件（需要在KLEE执行时添加--write-istats）
+$ klee --write-istats --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10
+
+# 启动KCachegrind查看详细性能分析
 $ kcachegrind klee-last/run.istats
 ```
 
-#### 测试用例分析
-```bash
-# 查看生成的测试用例
-$ ktest-tool klee-last/test000001.ktest
+**KCachegrind中的关键指标：**
+- **Instructions**: 每个函数的指令执行次数
+- **Fork**: 符号状态分叉统计
+- **Solver Time**: 约束求解时间分布
+- **Query Time**: 查询时间分析
 
-# 重放测试用例到原生程序
-$ cd ../../obj-gcov/src
+#### 测试用例深度分析
+
+**测试用例文件结构：**
+```bash
+# 查看生成的测试用例文件
+$ ls -la klee-last/
+# 输出示例：
+# test000001.ktest  - 第一个测试用例
+# test000002.ktest  - 第二个测试用例
+# ...
+# messages.txt      - 错误信息和警告
+# info              - 执行信息文件
+# warnings.txt      - 警告信息
+```
+
+**分析单个测试用例：**
+```bash
+# 查看测试用例详细内容
+$ ktest-tool klee-last/test000001.ktest
+```
+
+**典型输出解析：**
+```
+ktest file : 'test000001.ktest'
+args       : ['echo.bc', '--sym-args', '0', '1', '10']
+num objects: 3
+object    0: name: 'arg0'
+object    0: size: 2
+object    0: data: '\x00\x00'
+object    1: name: 'stdin'
+object    1: size: 8
+object    1: data: '\x00\x00\x00\x00\x00\x00\x00\x00'
+object    2: name: 'stdout-stat'
+object    2: size: 144
+object    2: data: ...
+```
+
+#### 测试用例重放和验证
+
+**重放到gcov版本程序：**
+```bash
+# 切换到gcov编译版本目录
+$ cd /home/klee/coreutils-6.11/obj-gcov/src
+
+# 清理之前的覆盖率数据
+$ rm -f *.gcda *.gcov
+
+# 重放所有KLEE生成的测试用例
 $ klee-replay ./echo ../../obj-llvm/src/klee-last/*.ktest
 ```
 
-#### 覆盖率验证
+**重放输出示例：**
+```
+KTEST_FILE=../../obj-llvm/src/klee-last/test000001.ktest
+KTEST_FILE=../../obj-llvm/src/klee-last/test000002.ktest
+...
+```
+
+#### 覆盖率测量和分析
+
+**生成gcov覆盖率报告：**
 ```bash
-# 清理之前的覆盖率数据
-$ rm -f *.gcda
-
-# 运行所有测试用例
-$ klee-replay ./echo ../../obj-llvm/src/klee-last/*.ktest
-
-# 生成覆盖率报告
+# 生成覆盖率统计文件
 $ gcov echo
-$ cat echo.c.gcov  # 查看详细覆盖率
+# 输出：File 'echo.c' - Lines executed:85.23% of 123
+
+# 查看详细的行级覆盖率
+$ cat echo.c.gcov
+```
+
+**gcov输出格式解读：**
+```
+       -:    1:/* echo.c */
+       1:    2:#include <stdio.h>
+       5:    3:int main(int argc, char **argv) {
+       5:    4:  if (argc > 1) {
+       3:    5:    printf("%s", argv[1]);
+   #####:    6:    if (error_condition)  // 未覆盖的代码
+       2:    7:      return 1;
+       5:    8:  }
+       5:    9:  return 0;
+      -:   10:}
+```
+- **数字**: 该行被执行的次数
+- **#####**: 该行从未被执行（未覆盖）
+- **-**: 空行或注释行
+
+#### 高级覆盖率分析
+
+**使用zcov生成HTML覆盖率报告：**
+```bash
+# 如果系统安装了zcov
+$ zcov-genhtml *.gcda
+$ firefox zcov-output/index.html  # 在浏览器中查看
+```
+
+**使用lcov生成详细报告：**
+```bash
+# 收集覆盖率数据
+$ lcov --capture --directory . --output-file coverage.info
+
+# 生成HTML报告
+$ genhtml coverage.info --output-directory coverage_html
+
+# 查看报告
+$ firefox coverage_html/index.html
+```
+
+#### 错误和异常分析
+
+**分析KLEE错误报告：**
+```bash
+# 查看错误信息
+$ cat klee-last/messages.txt
+
+# 查看警告信息
+$ cat klee-last/warnings.txt
+
+# 分析断言失败（如果有）
+$ ls klee-last/*.assert.err
+```
+
+**常见错误类型：**
+- **Assertion failures**: 程序断言失败
+- **Division by zero**: 除零错误
+- **Out of bound access**: 数组越界访问
+- **Use after free**: 释放后使用错误
+- **Memory leaks**: 内存泄漏
+
+#### 符号执行状态分析
+
+**查看状态遍历统计：**
+```bash
+# 查看状态遍历信息（如果使用了--write-states）
+$ find klee-last/ -name "*.kquery" | wc -l  # 查询文件数量
+$ find klee-last/ -name "*.smt2" | head -5   # 查看约束文件
+```
+
+**约束求解器性能分析：**
+```bash
+# 查看求解器统计（在messages.txt中）
+$ grep -E "(solver|query|time)" klee-last/messages.txt
+```
+
+#### 批量结果比较和分析
+
+**比较多个工具的覆盖率：**
+```bash
+# 创建批量分析脚本
+$ cat > analyze_results.sh << 'EOF'
+#!/bin/bash
+echo "Tool,ICov(%),BCov(%),Tests,Time(s)"
+for result in klee-out-*; do
+    if [ -d "$result" ]; then
+        tool=$(basename $result | sed 's/klee-out-//')
+        stats=$(klee-stats $result | tail -1)
+        echo "$tool,$stats" | cut -d'|' -f4,5,6,3 | tr '|' ','
+    fi
+done
+EOF
+
+$ chmod +x analyze_results.sh
+$ ./analyze_results.sh > coverage_summary.csv
+```
+
+#### 性能基准对比
+
+**OSDI'08原始实验基准：**
+- **平均行覆盖率**: 90%+ (中位数94%+)
+- **平均分支覆盖率**: 85%+
+- **平均测试用例**: 50-500个每工具
+- **平均执行时间**: 1-60分钟每工具
+
+**现代环境预期改进：**
+- **更好的约束求解**: 使用Z3求解器，求解速度提升
+- **内存管理优化**: 支持更大的符号数组和更深的路径
+- **并行化支持**: 可以使用多核进行符号执行加速
+
+#### 结果质量评估
+
+**评估标准：**
+```bash
+# 1. 覆盖率达标检查
+coverage_threshold=85
+actual_coverage=$(klee-stats klee-last | tail -1 | cut -d'|' -f4 | tr -d ' ')
+if (( $(echo "$actual_coverage > $coverage_threshold" | bc -l) )); then
+    echo "✓ 覆盖率达标: $actual_coverage%"
+else
+    echo "✗ 覆盖率不足: $actual_coverage%"
+fi
+
+# 2. 测试用例多样性检查
+test_count=$(ls klee-last/*.ktest | wc -l)
+if [ $test_count -gt 10 ]; then
+    echo "✓ 测试用例充足: $test_count 个"
+else
+    echo "✗ 测试用例不足: $test_count 个"
+fi
 ```
 
 ## 批量测试89个Coreutils工具
