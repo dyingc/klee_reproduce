@@ -1,9 +1,9 @@
 # KLEE 符号执行实验完整复现指南
 
-- [OSDI'08 Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)
-- [Using KLEE with Docker](https://klee-se.org/docker/)
+- [OSDI'08 Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)：说明 KLEE 在 [OSDI’08 论文](https://llvm.org/pubs/2008-12-OSDI-KLEE.pdf) 中用于实验 GNU Coreutils 的具体构建环境、软件版本、测试工具与参数配置等细节。
+- [Using KLEE with Docker](https://klee-se.org/docker/)：介绍如何通过 Docker 容器快速获取、运行与使用 KLEE，包括拉取镜像、创建容器和持久化使用等实用操作说明。
 
-** 教程 **
+**教程**
 - [First tutorial](https://klee-se.org/tutorials/testing-function/): 教程演示了如何用 KLEE 测试一个简单函数的基本步骤：把输入做成符号变量，编译成 LLVM 位码，用 KLEE 运行并生成测试用例，然后查看这些用例。
 - [Second tutorial](https://klee-se.org/tutorials/testing-regex/): 教程展示了如何用 KLEE 测试一个简单的正则表达式库：编译成 LLVM 位码，检查生成的符号，运行 KLEE，并观察生成的测试。
 - [Using a symbolic environment](https://klee-se.org/tutorials/using-symbolic/): 本教程通过示例讲解如何使用符号环境，例如将程序的命令行参数和文件作为符号输入，让 KLEE 探索各种可能的执行路径。
