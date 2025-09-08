@@ -34,6 +34,10 @@ RUN wget -O coreutils-${CU_VER}.tar.gz \
 
 # 配置、编译并安装（覆盖率开启，不用 NLS）
 WORKDIR ${homedir}/coreutils-${CU_VER}
+
+# 修改 sort.c：OSDI'08 Coreutils Experiments
+RUN sed s"%#define INPUT_FILE_SIZE_GUESS .*%#define INPUT_FILE_SIZE_GUESS 1024%g" -i src/sort.c
+
 RUN mkdir -p obj-gcov
 WORKDIR ${homedir}/coreutils-${CU_VER}/obj-gcov
 RUN ../configure --disable-nls \

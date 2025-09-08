@@ -99,9 +99,7 @@ klee@container:~$ klee --libc=uclibc --posix-runtime test.bc
 
 ## GNU Coreutils实验复现
 
-### 步骤1：获取和构建Coreutils
-
-#### 编译包含 Coreutils 的 Klee 镜像
+### 步骤1：编译包含 Coreutils 的 Klee 镜像
 ```Dockerfile
 # 请参照当前目录下的Dockerfile
 ```
@@ -142,11 +140,10 @@ $ find . -executable -type f | xargs -I '{}' extract-bc '{}'
 $ ls -l *.bc  # 验证字节码文件生成
 ```
 
-### 步骤2：sort工具特殊修改
+#### sort工具特殊修改
 
 **重要：sort工具需要特殊配置以兼容KLEE**
 
-#### 修改filesort.c
 ```c
 // 在源码中查找并修改：
 #define INPUT_FILE_SIZE_GUESS (1024 * 1024)
@@ -154,17 +151,17 @@ $ ls -l *.bc  # 验证字节码文件生成
 #define INPUT_FILE_SIZE_GUESS 1024
 ```
 
-#### 添加线程限制
-```bash
-# 在运行sort时添加--parallel=1参数，因为KLEE不支持多线程
-```
+### 步骤2：KLEE符号执行实验
 
-### 步骤3：KLEE符号执行实验
+#### 进入 KLEE 容器
+```bash
+./run.sh
+```
 
 #### 基础符号执行命令
 ```bash
 # 进入字节码目录
-$ cd obj-llvm/src
+$ cd /home/klee/coreutils-6.11/obj-llvm/src
 
 # 基本KLEE执行（以echo为例）
 $ klee --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
@@ -183,6 +180,11 @@ $ klee --simplify-sym-indices --write-cvcs --write-cov --output-module \
     --search=random-path --search=nurs:covnew \
     --use-batching-search --batch-instructions=10000 \
     ./echo.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
+```
+
+#### 查看统计信息
+```bash
+$ klee-stats klee-last
 ```
 
 #### 标准符号参数配置
