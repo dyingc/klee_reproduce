@@ -1,5 +1,7 @@
 # KLEE 快速入门：测试一个小函数
 
+[官方教程](https://klee-se.org/tutorials/testing-function/)
+
 欢迎！本 README 面向 **KLEE**（一个基于 LLVM 的动态符号执行工具）的初学者。我们将通过一个简单示例，带你了解 **如何用 KLEE 自动生成测试用例**。
 
 ---
@@ -55,7 +57,7 @@ int main() {
 ```
 
 这里的 klee_make_symbolic() 是关键：
-👉 它告诉 KLEE “把 a 看作可以取任何值”。
+👉 它告诉 KLEE "把 a 看作可以取任何值"。
 
 ⸻
 
@@ -145,18 +147,67 @@ object 0: data: 00 00 00 00
 
 ⸻
 
-6. 学习小结
+6. **重新执行测试用例（Replaying a test case）**
 
-步骤	学到的知识
-测试驱动	使用 klee_make_symbolic() 让输入变成符号变量
-编译	生成 LLVM bitcode .bc 文件供 KLEE 执行
-运行 KLEE	自动探索不同路径，生成覆盖完整逻辑的测试用例
-输出分析	查看 .ktest 文件，理解不同路径对应的输入
+虽然我们可以手动运行 KLEE 生成的测试用例（或使用现有测试框架），但 KLEE 提供了便捷的重执行库 `libkleeRuntest`，它会将对 `klee_make_symbolic()` 的调用替换为从 `.ktest` 文件中读取值的函数调用。
 
+### 使用重执行库的步骤：
+
+**① 设置库路径**
+```bash
+$ export LD_LIBRARY_PATH=path-to-klee-build-dir/lib/:$LD_LIBRARY_PATH
+```
+
+**② 编译原程序并链接重执行库**
+```bash
+$ gcc -I ../../include -L path-to-klee-build-dir/lib/ get_sign.c -lkleeRuntest
+```
+
+**③ 使用 KTEST_FILE 环境变量指定测试用例并运行**
+
+测试第一个用例（a = 0）：
+```bash
+$ KTEST_FILE=klee-last/test000001.ktest ./a.out
+$ echo $?
+0
+```
+
+测试第二个用例（a = 16843009，正数）：
+```bash
+$ KTEST_FILE=klee-last/test000002.ktest ./a.out
+$ echo $?
+1
+```
+
+测试第三个用例（a = -2147483648，负数）：
+```bash
+$ KTEST_FILE=klee-last/test000003.ktest ./a.out
+$ echo $?
+255
+```
+
+### 结果解析：
+* 第一个测试：返回值为 0（输入为 0）
+* 第二个测试：返回值为 1（输入为正数）
+* 第三个测试：返回值为 255（-1 转换为有效的退出码，范围 0-255）
+
+**重要提示：** `libkleeRuntest` 库会自动替换 `klee_make_symbolic()` 调用，从指定的 `.ktest` 文件中读取具体的测试值，让你能够在原生环境中重复执行 KLEE 生成的测试场景。
 
 ⸻
 
-7. 下一步学习
+7. 学习小结
+
+| 步骤 | 学到的知识 |
+|------|------------|
+| 测试驱动 | 使用 klee_make_symbolic() 让输入变成符号变量 |
+| 编译 | 生成 LLVM bitcode .bc 文件供 KLEE 执行 |
+| 运行 | KLEE 自动探索不同路径，生成覆盖完整逻辑的测试用例 |
+| 输出分析 | 查看 .ktest 文件，理解不同路径对应的输入 |
+| 重执行测试 | 使用 libkleeRuntest 在原生环境中验证测试用例 |
+
+⸻
+
+8. 下一步学习
 
 当你掌握了这个小例子，可以继续学习：
 * 符号化命令行参数、stdin、文件
@@ -168,7 +219,7 @@ object 0: data: 00 00 00 00
 最后寄语
 
 这就是 KLEE 的基本用法：
-写测试驱动 → 编译 → 运行 KLEE → 得到自动生成的测试。
+写测试驱动 → 编译 → 运行 KLEE → 得到自动生成的测试 → 重执行验证。
 
 有了它，你可以轻松探索复杂程序的不同执行路径！🚀
 
