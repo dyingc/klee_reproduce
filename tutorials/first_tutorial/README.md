@@ -45,7 +45,7 @@ KLEE 将会探索这 3 条路径，并为每条路径生成一个测试用例。
 我们需要一个 main()，把输入 a 变成符号变量：
 
 ```c
-#include <klee/klee.h>
+#include "klee/klee.h"
 
 int get_sign(int x);
 
@@ -160,7 +160,16 @@ $ export LD_LIBRARY_PATH=path-to-klee-build-dir/lib/:$LD_LIBRARY_PATH
 
 **② 编译原程序并链接重执行库**
 ```bash
-$ gcc -I ../../include -L path-to-klee-build-dir/lib/ get_sign.c -lkleeRuntest
+$ clang -o a.out -I /tmp/klee_src/include -L /tmp/klee_build130stp_z3/lib -lkleeRuntest get_sign.c
+```
+
+**注意：** 官方教程使用`gcc`编译，但在我们的环境里会报错。因此，修改为使用`clang`编译。
+
+```bash
+$ gcc -I /tmp/klee_src/include -L /tmp/klee_build130stp_z3/lib -lkleeRuntest get_sign.c
+/usr/bin/ld: /tmp/ccsgeSrr.o: in function `main':
+get_sign.c:(.text+0x5b): undefined reference to `klee_make_symbolic'
+collect2: error: ld returned 1 exit status
 ```
 
 **③ 使用 KTEST_FILE 环境变量指定测试用例并运行**
