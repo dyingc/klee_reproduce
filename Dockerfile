@@ -47,7 +47,7 @@ WORKDIR ${homedir}/coreutils-${CU_VER}
 RUN mkdir obj-llvm
 WORKDIR ${homedir}/coreutils-${CU_VER}/obj-llvm
 RUN export LLVM_COMPILER=clang && \
-    CC=wllvm ../configure --disable-nls CFLAGS="-g -O0" \
+    CC=wllvm ../configure --disable-nls CFLAGS="-g -O1 -Xclang -disable-llvm-passes -D__NO_STRING_INLINES  -D_FORTIFY_SOURCE=0 -U__OPTIMIZE__" \
   && make -j"$(nproc)" \
   && make -C src arch hostname
 
@@ -78,16 +78,14 @@ ARG homedir=/home/klee
 
 # 拷贝构建产物
 COPY --from=coreutils_builder --chown=klee:klee ${homedir}/coreutils-${CU_VER} ${homedir}/coreutils-${CU_VER}
+# 使用老版的 gcov 避免兼容性问题（段错误）
+COPY --from=coreutils_builder --chown=klee:klee /usr/bin/gcov /usr/bin/gcov
 
 # 设置工作目录
 WORKDIR ${homedir}/coreutils-${CU_VER}/obj-llvm/src
 
 # 准备显示 source code
 RUN ln -s /tmp/klee-uclibc-130/libc; ln -s /tmp/klee_src
-
-# 准备测试文件
-COPY klee-out-0.tar.gz .
-RUN tar -zxf klee-out-0.tar.gz && ln -s klee-out-0 klee-last && rm -f klee-out-0.tar.gz
 
 USER klee
 
