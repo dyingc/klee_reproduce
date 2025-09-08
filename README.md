@@ -20,10 +20,10 @@
 #### 快速启动
 ```bash
 # 拉取最新KLEE Docker镜像
-$ docker pull klee/klee:3.0
+$ docker pull klee/klee:latest
 
 # 启动交互式容器
-$ docker run --rm -ti --ulimit='stack=-1:-1' klee/klee:3.0
+$ docker run --rm -ti --ulimit='stack=-1:-1' klee/klee:latest
 ```
 
 **重要参数说明：**
