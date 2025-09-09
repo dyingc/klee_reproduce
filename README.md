@@ -324,18 +324,28 @@ $ klee-stats klee-out-* | sort -n -k 2
 
 **使用KCachegrind进行指令级分析：**
 ```bash
-# 生成可视化统计文件（需要在KLEE执行时添加--write-istats）
-$ klee --write-istats --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10
+# 生成可视化统计文件
+$ klee --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10
 
 # 启动KCachegrind查看详细性能分析
 $ kcachegrind klee-last/run.istats
 ```
 
 **KCachegrind中的关键指标：**
-- **Instructions**: 每个函数的指令执行次数
-- **Fork**: 符号状态分叉统计
-- **Solver Time**: 约束求解时间分布
-- **Query Time**: 查询时间分析
+- **Incl.（Inclusive）**：包含该函数自身以及它调用的函数的占比。
+- **Self**：仅该函数自身的占比（不含被调函数）。
+- **Called**：函数被调用次数。
+- **Function**：函数名称。
+
+
+- **CoveredInstructions (lcov)**：被执行的指令百分比。
+- **Forks**：路径分叉次数。
+- **Instructions (I)**：总指令数占比。
+- **Queries / QueriesValid / QueriesInvalid**：KLEE 与 SMT 求解器交互的次数。
+- **Queries (Q)**：总查询次数。
+- **QueriesValid (Qv)**：有效查询。
+- **QueriesInvalid (Qiv)**：无效查询。
+- **QueryTime (Qtime)**：查询求解花费的时间百分比。
 
 #### 测试用例深度分析
 
