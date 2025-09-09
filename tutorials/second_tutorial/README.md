@@ -156,7 +156,9 @@ Info:
 | **abort** | `.abort.err` | 程序调用了 abort() |
 | **assert** | `.assert.err` | 断言失败 |
 | **div** | `.div.err` | 除零错误 |
-| **user** | `.user.err` | KLEE 使用错误 |
+| **user** | `.user.err` | 输入存在问题（无效的 KLEE 内部函数调用）或 KLEE 的使用方式有误 |
+| **exec** | `.exec.err` | 出现了一个阻止 KLEE 执行程序的问题；例如未知指令、调用无效的函数指针，或内联汇编 |
+| **model** | `.model.err` | KLEE 无法保持完整的精度，只能探索程序状态的一部分。例如，当前不支持 malloc 的符号化大小，在这种情况下 KLEE 会将参数具体化 |
 
 ⸻
 
@@ -217,7 +219,13 @@ klee_assume(re[0] != '^');
 
 // 示例2：限制只测试小写字母
 for (int i = 0; i < SIZE-1; i++) {
-  klee_assume(re[i] >= 'a' && re[i] <= 'z' || re[i] == '\0');
+  // klee_assume(re[i] >= 'a' && re[i] <= 'z' || re[i] == '\0'); // 应避免这种直接使用条件运算符的用法
+  // 方法1：使用位运算符
+  klee_assume((re[i] >= 'a' & re[i] <= 'z') | (re[i] == '\0'));
+
+  // 方法2：拆分为两个独立、更简单的约束
+  // klee_assume(re[i] == '\0' | re[i] >= 'a');
+  // klee_assume(re[i] == '\0' | re[i] <= 'z');
 }
 
 // 示例3：确保至少包含一个 *
@@ -230,7 +238,7 @@ klee_assume(has_star);
 
 ⚠️ **注意事项**：
 - 避免在 `klee_assume` 中使用 `&&` 和 `||`（会产生分支）
-- 使用 `&` 和 `|` 代替短路运算符
+- 使用 `&` 和 `|` 代替短路运算符（总是计算，无分支）
 - 尽量拆分为多个简单的 `klee_assume` 调用
 
 ⸻
