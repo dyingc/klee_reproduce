@@ -120,6 +120,9 @@ int main() {
   // Make the input symbolic.
   klee_make_symbolic(re, sizeof re, "re");  // 让 re 的每个字节成为符号变量，便于 KLEE 探索路径
 
+  // // 对符号变量增加约束条件，使其最后一个字符为 '\0'（字符串结束符）。
+  // klee_assume(re[SIZE-1] == '\0');
+
   // Try to match against a constant string "hello".
   match(re, "hello");                       // 对固定文本 "hello" 尝试匹配（未断言结果，仅供路径探索）
 
