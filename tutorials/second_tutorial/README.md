@@ -130,22 +130,54 @@ KLEE: done: generated tests = 16
 
 ## 5. 错误报告分析
 
-KLEE 为每个错误生成 `.err` 文件，让我们看看其中一个：
+KLEE 为每个错误生成 `.err` 文件，让我们看看其中一个错误的例子：
 
 ```
+klee@d8a9d294729a:/tmp/klee_src/examples/regexp/klee-last$ ktest-tool test000009.ktest
+ktest file : 'test000009.ktest'
+args       : ['Regexp.bc']
+num objects: 1
+object 0: name: 're'
+object 0: size: 7
+object 0: data: b'^\x01*\x01*\x01*'
+object 0: hex : 0x5e012a012a012a
+object 0: text: ^.*.*.*
+klee@d8a9d294729a:/tmp/klee_src/examples/regexp/klee-last$ cat test000009.ptr.err
 Error: memory error: out of bound pointer
-File: .../klee/examples/regexp/Regexp.c
-Line: 23
+File: Regexp.c
+Line: 73
+assembly.ll line: 78
+State: 37
 Stack:
-#0 00000146 in matchhere (re=14816471, text=14815301)
-#1 00000074 in matchstar (c, re=14816471, text=14815301)
-...
-#9 00000327 in main ()
+        #000000078 in matchhere(re=21802034135047, text=23020328452096) at Regexp.c:73
+        #100000210 in matchstar(c=symbolic, re=21802034135047, text=23020328452096) at Regexp.c:35
+        #200000103 in matchhere(re=21802034135045, text=23020328452096) at Regexp.c:76
+        #300000210 in matchstar(c=symbolic, re=21802034135045, text=23020328452096) at Regexp.c:35
+        #400000103 in matchhere(re=21802034135043, text=23020328452096) at Regexp.c:76
+        #500000210 in matchstar(c=symbolic, re=21802034135043, text=23020328452096) at Regexp.c:35
+        #600000103 in matchhere(re=21802034135041, text=23020328452096) at Regexp.c:76
+        #700000030 in match(re=21802034135040, text=23020328452096) at Regexp.c:101
+        #800000186 in main() at Regexp.c:124
 Info:
-  address: 14816471
-  next: object at 14816624 of size 4
-  prev: object at 14816464 of size 7
+        address: 21802034135047
+        next: object at 21789686104064 of size 4
+                MO245[4] allocated at matchstar():  %c.addr = alloca i32, align 4
 ```
+
+这说明：
+
+ - **错误类型**：out of bound pointer（越界读）。
+ - **触发输入**：re = "^.*.*.*"（原始字节 0x5e 01 2a 01 2a 01 2a），数组长度 SIZE=7，未保证以 '\0' 结尾。
+ - **触发点**：matchhere 第 73 行对 re[0] 的读取：
+
+```c
+if (re[0] == '\0')           // 当 re 指向已经超过最后一个字符（通过 Stack 信息可知，这是由之前的第 76 行，然后，第 35 行，迭代而来）时，会读到 re[0]（越界）
+    return 0;
+```
+
+栈回溯显示多次 matchstar/matchhere 回溯后，re 恰好指到模式尾部的 '*'之后，继续访问 re[0] 导致越界。
+
+ - **根因**：输入未 NUL 终止：re 被完全符号化为 7 个字节，代码却按 C 字符串处理并前进指针，最终读到数组边界外。
 
 ### KLEE 可检测的错误类型
 
