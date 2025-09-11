@@ -12,6 +12,6 @@ docker run --rm --name "klee-dev-${VER}" -it \
   "${IMAGE_NAME}" \
   bash -lc 'clang -I ../../include -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone Regexp.c; \
     echo "✅ compile done"; \
-    klee --only-output-states-covering-new Regexp.bc; \
+    time klee --only-output-states-covering-new --solver-backend=stp Regexp.bc; \
     echo "✅ run done"; \
     exec bash'
