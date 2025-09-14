@@ -7,6 +7,7 @@
  *
  */
 
+#include <assert.h>
 #include "klee/klee.h"
 
 static int matchhere(char*,char*);
@@ -111,7 +112,17 @@ int match(char *re, char *text) {
  */
 
 // The size of the buffer to test with.
-#define SIZE 7
+#define SIZE 4 // 本例中，每增加一个字节长度，路径大约增加3～3.5倍，耗时大约增加到4倍左右
+/*
+ * 5 - 0m1.764s
+ * 6 - 0m5.153s
+ * 7 - 0m19.618s
+ * 8 - 1m16.721s
+ * 9 - 5m08.633s
+ * 10- 20m4.141s
+ */
+
+ #define TARGET_STR_SIZE 6 // 待匹配字符串的最大长度（含结尾 '\0'）
 
 int main() {
   // The input regular expression.
@@ -123,8 +134,16 @@ int main() {
   // 对符号变量增加约束条件，使其最后一个字符为 '\0'（字符串结束符）。
   klee_assume(re[SIZE-1] == '\0');
 
+  char to_be_matched_str[TARGET_STR_SIZE]; // 待匹配的文本
+
+  klee_make_symbolic(to_be_matched_str, sizeof(to_be_matched_str), "to_be_matched_str"); // 让 to_be_matched_str 的每个字节成为符号变量
+  klee_assume(to_be_matched_str[TARGET_STR_SIZE-1] == '\0'); // 同样让其最后一个字符为 '\0'
+
+  uint32_t result;
   // Try to match against a constant string "hello".
-  match(re, "hello");                       // 对固定文本 "hello" 尝试匹配（未断言结果，仅供路径探索）
+  result = match(re, to_be_matched_str);  // 对符号变量 "to_be_matched_str" 尝试匹配
+
+  klee_make_symbolic(&result, sizeof(result), "result"); // 让 result 成为“固定对象”，以便在生成的测试用例中保存其值
 
   return 0;
 }
