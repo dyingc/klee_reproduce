@@ -130,7 +130,7 @@ void test(int *array, unsigned nelem) {
       dump_array_klee("input",          array, nelem);
       dump_array_klee("insertion_sort", temp1,  nelem);
       dump_array_klee("bubble_sort",    temp2,  nelem);
-      // klee_assert(0);  // 路径终止，生成反例
+      klee_assert(0);  // 路径终止，生成反例
     }
   }
 }
