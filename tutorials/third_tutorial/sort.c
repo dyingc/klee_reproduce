@@ -130,22 +130,27 @@ void test(int *array, unsigned nelem) {
       dump_array_klee("input",          array, nelem);
       dump_array_klee("insertion_sort", temp1,  nelem);
       dump_array_klee("bubble_sort",    temp2,  nelem);
-      klee_assert(0);  // 路径终止，生成反例
+      // klee_assert(0);  // 路径终止，生成反例
     }
   }
 }
 
 int main() {
-  int input[4] = {4, 3, 2, 1};  // 初始值仅占位
+  int nelem; // 符号化的待排序元素个数
+
+  klee_make_symbolic(&nelem, sizeof(nelem), "nelem");
+  klee_assume(nelem == 3); // 固定个数，便于分析
+
+  int input[nelem]; // 符号化的待排序数组
 
   klee_make_symbolic(&input, sizeof(input), "input");
 
-  // （可选）范围约束，控制状态数量：
-  // for (int i = 0; i < 4; ++i) {
-  //   klee_assume(input[i] >= -10);
-  //   klee_assume(input[i] <=  10);
-  // }
+  //（可选）范围约束，控制状态数量：
+  for (int i = 0; i < nelem; ++i) {
+    klee_assume(input[i] >= 0x0);
+    klee_assume(input[i] <= 0xF);
+  }
 
-  test(input, sizeof(input)/sizeof(input[0]));
+  test(input, nelem);
   return 0;
 }
