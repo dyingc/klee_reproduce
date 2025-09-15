@@ -232,13 +232,15 @@ $ export LD_LIBRARY_PATH=path-to-klee-build-dir/lib/:$LD_LIBRARY_PATH
 $ clang -o a.out -I /tmp/klee_src/include -L /tmp/klee_build130stp_z3/lib -lkleeRuntest get_sign.c
 ```
 
-**注意：** 官方教程使用`gcc`编译，但在我们的环境里会报错。因此，修改为使用`clang`编译。
+**或者** 采取先`编译`再`链接`的方式（更稳定）：
 
 ```bash
-$ gcc -I /tmp/klee_src/include -L /tmp/klee_build130stp_z3/lib -lkleeRuntest get_sign.c
-/usr/bin/ld: /tmp/ccsgeSrr.o: in function `main':
-get_sign.c:(.text+0x5b): undefined reference to `klee_make_symbolic'
-collect2: error: ld returned 1 exit status
+$ gcc -I /tmp/klee_src/include -L /tmp/klee_build130stp_z3/lib \
+  -c get_sign.c -o get_sign.o && \
+  gcc get_sign.o -o a.out -L /tmp/klee_build130stp_z3/lib \
+  -lkleeRuntest && rm -f get_sign.o
+$ ls
+a.out  get_sign.bc  get_sign.c  klee-last  klee-out-0
 ```
 
 **③ 使用 KTEST_FILE 环境变量指定测试用例并运行**
