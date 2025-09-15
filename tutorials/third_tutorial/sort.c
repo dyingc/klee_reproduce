@@ -5,102 +5,118 @@
  * 3) 通过断言 assert(temp1[i] == temp2[i]) 交叉验证两种实现是否等价；
  * 4) 如果实现不等价（本文件的 bubble_sort 故意“只做一趟”→ 有缺陷），KLEE 会生成能触发断言失败的反例。
  *
- * 关于你遇到的报错（external call with symbolic argument: printf）：
- * - KLEE 默认不允许“把符号数据作为参数传给外部函数”（如 printf）。因此这里会报错。
- * - 解决方法（任选其一）：
- *   A) 使用 uClibc：klee --libc=uclibc sort.bc
- *   B) 放宽策略：klee --external-calls=all sort.bc （或 --external-calls=concrete）
- *   C) 教学/调试时把下面的 printf 注释掉，或将其改为 klee_print_expr；
- *      klee_print_expr 的声明在 <klee/klee.h>，例如：klee_print_expr("input0", input[0]);
+ * 说明：为避免在符号实参上传给外部库函数（printf）时触发 KLEE 的外部调用策略，
+ * 本版本将所有 printf 改为 KLEE 内建的输出：klee_warning / klee_print_expr。
+ * 这两者由 KLEE 提供，不会丢失符号性，也不需要放宽 --external-calls。
  *
  * 进阶补充（可选）：
  * - 路径空间太大时，可以对输入加范围约束（klee_assume），例如 [-10, 10]，以减少状态爆炸。
- * - 运行时常用选项：--only-output-states-covering-new、-max-time、-max-forks 等，详见教程二/官方文档
- * https://klee-se.org/tutorials/testing-regex/
+ * - 运行时常用选项：--only-output-states-covering-new、-max-time、-max-forks 等，详见官方文档。
  */
 
-#include "klee/klee.h"  // KLEE 的内建函数声明：klee_make_symbolic / klee_assume / klee_print_expr 等，需要有 KLEE 支持（如：运行在 KLEE 容器中）
+#include "klee/klee.h"  // klee_make_symbolic / klee_assume / klee_print_expr / klee_warning / klee_assert
 
-#include <assert.h>     // assert()
-#include <stdio.h>      // printf() —— 注意：这会触发“外部调用”策略
-#include <stdlib.h>     // malloc()/free()
-#include <string.h>     // memcpy()/memmove()
+#include <string.h>     // memcpy()/memmove()：clang 会降为 LLVM 内建，KLEE 能处理
+#include <assert.h>     // assert()，但通常推荐 klee_assert(0) 更纯粹
+
+/* ==========
+ * 一行数组打印（十六进制），无 libc、无堆内存
+ * 设计要点：
+ *  - 用 klee_get_value_i32 将元素在当前路径上具体化；
+ *  - 在栈上申请足够的缓冲区（VLA），拼接字符串；
+ *  - 最后用 klee_warning(line) 打印一整行。
+ * ========== */
+
+static inline void append_char(char *buf, unsigned *p, char c) { buf[(*p)++] = c; }
+
+static void append_hex_u32(char *buf, unsigned *p, unsigned v) {
+  static const char HEX[] = "0123456789abcdef";
+  append_char(buf, p, '0'); append_char(buf, p, 'x');
+  int started = 0;
+  for (int shift = 28; shift >= 0; shift -= 4) {
+    unsigned nib = (v >> shift) & 0xF;
+    if (nib || started || shift == 0) { append_char(buf, p, HEX[nib]); started = 1; }
+  }
+}
+
+static void dump_array_klee(const char *title, const int *a, unsigned n) {
+  char line[12 * (n ? n : 1) + 32];
+  unsigned pos = 0;
+
+  for (const char *t = title; *t; ++t) append_char(line, &pos, *t);
+  append_char(line, &pos, ' '); append_char(line, &pos, '=');
+  append_char(line, &pos, ' '); append_char(line, &pos, '[');
+
+  for (unsigned i = 0; i < n; ++i) {
+    if (i) { append_char(line, &pos, ','); append_char(line, &pos, ' '); }
+    unsigned vi = (unsigned)klee_get_value_i32(a[i]);
+    append_hex_u32(line, &pos, vi);
+  }
+
+  append_char(line, &pos, ']');
+  line[pos] = '\0';
+  klee_warning(line);
+}
 
 /*
  * insert_ordered：
  *  - 把 item 插入到“当前已有 i 个有序元素”的 temp 数组中，使之仍然有序。
- *  - 用 memmove 把 [i, nelem-1] 整段右移一个元素，然后在空出的位置 array[i] = item。
- *  - 注意：这里假设 array[0..nelem-1] 的“有效区间”是有序的（调用者保证）。
+ *  - 用 memmove 把 [i, nelem-1] 整段右移一个元素，然后 array[i] = item。
+ *  - 假设 array[0..nelem-1] 的“有效区间”已是有序的（由调用者保证）。
  */
 static void insert_ordered(int *array, unsigned nelem, int item) {
   unsigned i = 0;
-
   for (; i != nelem; ++i) {
     if (item < array[i]) {
-      // 将 [array[i], array[nelem-1]] 整段右移 1 位，为 item 腾位置
       memmove(&array[i+1], &array[i], sizeof(*array) * (nelem - i));
       break;
     }
   }
-
-  array[i] = item;  // 如果 item >= 所有元素，i == nelem，会直接放在“有效区间”末尾
+  array[i] = item;  // 如果 item 最大，i==nelem，直接放在末尾
 }
 
 /*
- * bubble_sort（有意引入的“残缺实现”）：
- *  - 典型冒泡需要多趟扫描，直到某一趟中没有发生交换为止。
- *  - 这里的实现虽然设置了 done 标志，但立刻在第一次外层迭代后 break；
- *    → 实际只做了一趟扫描，因此很多输入不会被完全排序（存在缺陷）。
- *  - 教程的设计正是利用这个缺陷，让 KLEE 找到使两种排序输出不同的输入，从而触发断言。
+ * bubble_sort（有意残缺实现）：
+ *  - 正常冒泡需多趟扫描，直到某趟无交换为止；
+ *  - 此处实现无论是否有交换，都立刻 break → 只做一趟；
+ *  - 因此常不能完全排序，存在缺陷。
  */
 void bubble_sort(int *array, unsigned nelem) {
   for (;;) {
     int done = 1;
-
     for (unsigned i = 0; i + 1 < nelem; ++i) {
       if (array[i+1] < array[i]) {
-        int t = array[i + 1];
-        array[i + 1] = array[i];
-        array[i] = t;
-        done = 0;  // 本趟发生过交换
+        int t = array[i+1]; array[i+1] = array[i]; array[i] = t;
+        done = 0;
       }
     }
-
-    break;  // ⚠️ 有意为之：直接退出循环 → 只做一趟扫描，无法保证全局有序
-    // 正确实现应为：if (done) break;  // 没有交换才退出；否则继续下一趟
+    break;  // ⚠️ 有意：直接退出 → 只做一趟
   }
 }
 
 /*
  * insertion_sort：
- *  - 经典“插入排序”思路：维护一个临时数组 temp，前 i 个元素永远有序；
- *  - 每次把 array[i] 按序插入到 temp 的前 i 段，使之仍然有序；
- *  - 最终把 temp 复制回原数组。
+ *  - 经典插入排序：临时数组 temp，前 i 个元素保持有序；
+ *  - 每次将 array[i] 插入 temp[0..i-1]；
+ *  - 最后复制回 array。
+ *  - 本实现用 VLA（栈上变长数组），避免 malloc/free。
  */
 void insertion_sort(int *array, unsigned nelem) {
-  int *temp = malloc(sizeof(*temp) * nelem);  // 临时有序数组
-
+  int temp[nelem];
   for (unsigned i = 0; i != nelem; ++i)
-    insert_ordered(temp, i, array[i]);        // 将 array[i] 插入到 temp[0..i-1] 的有序区
-
-  memcpy(array, temp, sizeof(*array) * nelem); // temp 拷贝回原数组
-  free(temp);
+    insert_ordered(temp, i, array[i]);
+  memcpy(array, temp, sizeof(*array) * nelem);
 }
 
 /*
  * test：
- *  - 为了“交叉验证”，把同一份输入各拷贝一份（temp1/2），分别喂给插入排序/冒泡排序；
- *  - 打印输入与两个排序的输出（注意 printf 的“外部调用”问题，见文件顶注释）；
- *  - 最后逐元素断言结果一致：若冒泡排序不正确 → 触发 assert 失败（KLEE 将产生反例）。
+ *  - 拷贝同一输入到 temp1/2，分别执行插入排序与冒泡排序；
+ *  - 如果结果不一致，打印输入/两种结果，然后 klee_assert(0)；
+ *  - 否则保持安静通过。
  */
 void test(int *array, unsigned nelem) {
-  int *temp1 = malloc(sizeof(*array) * nelem);
-  int *temp2 = malloc(sizeof(*array) * nelem);
-
-  // ⚠️ 这里打印的是“符号数据” → 可能触发 KLEE 的外部调用报错
-  // 解决：--libc=uclibc 或 --external-calls=all，或把这几行 printf 注释掉/改用 klee_print_expr
-  printf("input: [%d, %d, %d, %d]\n",
-         array[0], array[1], array[2], array[3]);
+  int temp1[nelem];
+  int temp2[nelem];
 
   memcpy(temp1, array, sizeof(*array) * nelem);
   memcpy(temp2, array, sizeof(*array) * nelem);
@@ -108,34 +124,28 @@ void test(int *array, unsigned nelem) {
   insertion_sort(temp1, nelem);
   bubble_sort(temp2, nelem);
 
-  printf("insertion_sort: [%d, %d, %d, %d]\n",
-         temp1[0], temp1[1], temp1[2], temp1[3]);
-
-  printf("bubble_sort   : [%d, %d, %d, %d]\n",
-         temp2[0], temp2[1], temp2[2], temp2[3]);
-
-  // 交叉验证的关键断言：若两种排序结果不一致，则触发失败
-  for (unsigned i = 0; i != nelem; ++i)
-    assert(temp1[i] == temp2[i]);
-
-  free(temp1);
-  free(temp2);
+  for (unsigned i = 0; i != nelem; ++i) {
+    if (temp1[i] != temp2[i]) {
+      klee_warning("Mismatch found; dumping arrays:");
+      dump_array_klee("input",          array, nelem);
+      dump_array_klee("insertion_sort", temp1,  nelem);
+      dump_array_klee("bubble_sort",    temp2,  nelem);
+      klee_assert(0);  // 路径终止，生成反例
+    }
+  }
 }
 
 int main() {
-  // 初始数组（内容会被 klee_make_symbolic 覆盖为符号值；此处常量仅作占位）
-  int input[4] = { 4, 3, 2, 1 };
+  int input[4] = {4, 3, 2, 1};  // 初始值仅占位
 
-  // 把整个数组（16 字节）标记为“符号输入”
-  // KLEE 将探索 input[0..3] 的各种取值组合
   klee_make_symbolic(&input, sizeof(input), "input");
 
-  // （可选）为控制状态规模，可加范围约束（取消注释即可）：
+  // （可选）范围约束，控制状态数量：
   // for (int i = 0; i < 4; ++i) {
   //   klee_assume(input[i] >= -10);
   //   klee_assume(input[i] <=  10);
   // }
 
-  test(input, 4);
+  test(input, sizeof(input)/sizeof(input[0]));
   return 0;
 }
