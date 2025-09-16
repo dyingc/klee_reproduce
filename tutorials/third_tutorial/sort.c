@@ -19,44 +19,61 @@
 #include <string.h>     // memcpy()/memmove()：clang 会降为 LLVM 内建，KLEE 能处理
 #include <assert.h>     // assert()，但通常推荐 klee_assert(0) 更纯粹
 
-/* ==========
- * 一行数组打印（十六进制），无 libc、无堆内存
- * 设计要点：
- *  - 用 klee_get_value_i32 将元素在当前路径上具体化；
- *  - 在栈上申请足够的缓冲区（VLA），拼接字符串；
- *  - 最后用 klee_warning(line) 打印一整行。
- * ========== */
+/* ----- 回放适配层：REPLAY 下禁用 KLEE 的日志/具体化输出 ----- */
+/* ----- 回放适配层：REPLAY 下禁用 KLEE 的日志/具体化输出 ----- */
+#ifdef REPLAY
+  /* 回放时不需要这些日志；把它们编译成 no-op */
+  #define klee_warning(msg)        ((void)0)
+  #define klee_warning_once(msg)   ((void)0)
 
-static inline void append_char(char *buf, unsigned *p, char c) { buf[(*p)++] = c; }
+  /* 回放时输入已是具体值；把 get_value 变成恒等宏，避免与头文件声明冲突 */
+  #define klee_get_value_i32(x)    (x)
 
-static void append_hex_u32(char *buf, unsigned *p, unsigned v) {
-  static const char HEX[] = "0123456789abcdef";
-  append_char(buf, p, '0'); append_char(buf, p, 'x');
-  int started = 0;
-  for (int shift = 28; shift >= 0; shift -= 4) {
-    unsigned nib = (v >> shift) & 0xF;
-    if (nib || started || shift == 0) { append_char(buf, p, HEX[nib]); started = 1; }
+  /* 回放时静音数组转储：给出“同名、同签名”的空实现即可（不要用宏替换函数名） */
+  static inline void dump_array_klee(const char *title, const int *a, unsigned n) {
+    (void)title; (void)a; (void)n;
   }
-}
+#else
 
-static void dump_array_klee(const char *title, const int *a, unsigned n) {
-  char line[12 * (n ? n : 1) + 32];
-  unsigned pos = 0;
+  /* ==========
+  * 一行数组打印（十六进制），无 libc、无堆内存
+  * 设计要点：
+  *  - 用 klee_get_value_i32 将元素在当前路径上具体化；
+  *  - 在栈上申请足够的缓冲区（VLA），拼接字符串；
+  *  - 最后用 klee_warning(line) 打印一整行。
+  * ========== */
 
-  for (const char *t = title; *t; ++t) append_char(line, &pos, *t);
-  append_char(line, &pos, ' '); append_char(line, &pos, '=');
-  append_char(line, &pos, ' '); append_char(line, &pos, '[');
+  static inline void append_char(char *buf, unsigned *p, char c) { buf[(*p)++] = c; }
 
-  for (unsigned i = 0; i < n; ++i) {
-    if (i) { append_char(line, &pos, ','); append_char(line, &pos, ' '); }
-    unsigned vi = (unsigned)klee_get_value_i32(a[i]);
-    append_hex_u32(line, &pos, vi);
+  static void append_hex_u32(char *buf, unsigned *p, unsigned v) {
+    static const char HEX[] = "0123456789abcdef";
+    append_char(buf, p, '0'); append_char(buf, p, 'x');
+    int started = 0;
+    for (int shift = 28; shift >= 0; shift -= 4) {
+      unsigned nib = (v >> shift) & 0xF;
+      if (nib || started || shift == 0) { append_char(buf, p, HEX[nib]); started = 1; }
+    }
   }
 
-  append_char(line, &pos, ']');
-  line[pos] = '\0';
-  klee_warning(line);
-}
+  static void dump_array_klee(const char *title, const int *a, unsigned n) {
+    char line[12 * (n ? n : 1) + 32];
+    unsigned pos = 0;
+
+    for (const char *t = title; *t; ++t) append_char(line, &pos, *t);
+    append_char(line, &pos, ' '); append_char(line, &pos, '=');
+    append_char(line, &pos, ' '); append_char(line, &pos, '[');
+
+    for (unsigned i = 0; i < n; ++i) {
+      if (i) { append_char(line, &pos, ','); append_char(line, &pos, ' '); }
+      unsigned vi = (unsigned)klee_get_value_i32(a[i]);
+      append_hex_u32(line, &pos, vi);
+    }
+
+    append_char(line, &pos, ']');
+    line[pos] = '\0';
+    klee_warning(line);
+  }
+#endif
 
 /*
  * insert_ordered：

@@ -45,69 +45,134 @@ cd /tmp/klee_src/examples/sort
 
 clang -I ../../include -emit-llvm -g -c -O0 -Xclang -disable-O0-optnone sort.c
 
-（可选）快速检查符号：
+#（可选）快速检查符号：
 
 llvm-nm sort.bc | grep -E 'main|klee_make_symbolic|bubble_sort|insertion_sort'
+```
 
-2.2 运行 KLEE
+### 2.2 运行 KLEE
 
 由于已经移除 printf，最小命令即可：
 
-klee --only-output-states-covering-new sort.bc
+```bash
+klee --emit-all-errors --only-output-states-covering-new --solver-backend=stp sort.bc
+```
 
 说明：
-	•	本程序不做文件/系统调用，memcpy/memmove 会被降低为 LLVM intrinsic，malloc/free 有 KLEE 运行时支持，因此无需 --libc=uclibc 或 --posix-runtime。
-	•	若你的代码加入了 POSIX 交互（如打开文件、读写 STDIN/STDOUT），再参考 Using a symbolic environment 的方式加 --posix-runtime 以及 -sym-* 参数。
+- 本程序不做文件/系统调用，memcpy/memmove 会被降低为 LLVM intrinsic，malloc/free 有 KLEE 运行时支持，因此无需 --libc=uclibc 或 --posix-runtime。
+- 若你的代码加入了 POSIX 交互（如打开文件、读写 STDIN/STDOUT），再参考 Using a symbolic environment 的方式加 --posix-runtime 以及 -sym-* 参数。
 
 预期现象：KLEE 会探索到使 insertion_sort 与“残缺冒泡排序”输出不同的输入，触发断言，生成 .assert.err 和对应 .ktest。
 
 ⸻
 
-3. 查看失败用例与统计
+## 3. 查看失败用例与统计
 
 列目录（klee-last 指向最近一次运行目录）：
 
+```bash
 ls -1 klee-last
+```
 
 找到断言失败（形如 test000123.assert.err）：
 
-ls klee-last/*assert.err
+```bash
+ls klee-last/test*assert.err
+```
 
 用 ktest-tool 查看同编号的输入（工具文档见 KLEE Tools）：
 
-ktest-tool klee-last/test000123.ktest
+```bash
+$ ktest-tool klee-last/test000001.ktest
+ktest file : 'klee-last/test000001.ktest'
+args       : ['sort.bc']
+num objects: 2
+object 0: name: 'nelem'
+object 0: size: 4
+object 0: data: b'\x03\x00\x00\x00'
+object 0: hex : 0x03000000
+object 0: int : 3
+object 0: uint: 3
+object 0: text: ....
+object 1: name: 'input'
+object 1: size: 12
+object 1: data: b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+object 1: hex : 0x000000000000000000000000
+object 1: text: ............
 
-（可选）查看统计：
+#（可选）查看统计：
 
-klee-stats klee-last
+$ klee-stats klee-last
+------------------------------------------------------------------------
+|  Path   |  Instrs|  Time(s)|  ICov(%)|  BCov(%)|  ICount|  TSolver(%)|
+------------------------------------------------------------------------
+|klee-last|   13988|     0.29|    96.84|    86.84|     569|       85.81|
+------------------------------------------------------------------------
+```
 
 
 ⸻
 
-4. 回放失败用例（原生二进制 + libkleeRuntest）
+## 4. 回放失败用例（原生二进制 + libkleeRuntest）
 
-做法与教程一一致（“Replaying a test case”）：
+做法与教程1一致（“Replaying a test case”）：
 https://klee-se.org/tutorials/testing-function/
 
-# 按你的 KLEE 构建路径调整
-export LD_LIBRARY_PATH=/path/to/klee/build/lib:$LD_LIBRARY_PATH
-
+```bash
 # 重新编译并链接回放库
-gcc -I ../../include -L /path/to/klee/build/lib/ sort.c -lkleeRuntest
+gcc -I /tmp/klee_src/include -DREPLAY -L /tmp/klee_build130stp_z3/lib \
+  -c sort.c -o sort.o && \
+  gcc sort.o -o sort.out -DREPLAY -L /tmp/klee_build130stp_z3/lib \
+  -lkleeRuntest && rm -f sort.o
 
 # 指定要回放的 failing ktest
-KTEST_FILE=klee-last/test000123.ktest ./a.out
-echo $?   # 断言失败会得到非 0 退出码
+$ KTEST_FILE=klee-last/test000001.ktest ./sort.out
+$ echo $?
+0
+$ KTEST_FILE=klee-last/test000002.ktest ./sort.out
+sort.out: sort.c:150: test: Assertion `0` failed.
+Aborted (core dumped) # 断言失败
+klee@f6ef5b170bac:/tmp/klee_src/examples/sort$ cat klee-last/test000002.assert.err # 查看对应的错误信息
+Error: ASSERTION FAIL: 0
+File: sort.c
+Line: 150
+assembly.ll line: 308
+State: 2
+Stack:
+        #000000308 in test(array=21576460271616, nelem=symbolic) at sort.c:150
+        #100000492 in main() at sort.c:171
+```
 
+查看导致这一断言失败的输入：
+
+```bash
+$ ktest-tool klee-last/test000002.ktest
+ktest file : 'klee-last/test000002.ktest'
+args       : ['sort.bc']
+num objects: 2
+object 0: name: 'nelem'
+object 0: size: 4
+object 0: data: b'\x03\x00\x00\x00'
+object 0: hex : 0x03000000
+object 0: int : 3
+object 0: uint: 3
+object 0: text: ....
+object 1: name: 'input'
+object 1: size: 12
+object 1: data: b'\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00'
+object 1: hex : 0x010000000100000000000000
+object 1: text: ............
+```
 
 ⸻
 
-5. 缺陷成因与修复
+## 5. 缺陷成因与修复
 
 原因：bubble_sort() 只做一趟扫描后就 break，无法保证全局有序，因此与 insertion_sort() 的输出不等价。KLEE 会自动生成“需要多趟冒泡才有序”的输入触发断言失败。
 
 修复示例（直到本趟无交换才停止）：
 
+```c
 void bubble_sort(int *array, unsigned nelem) {
   for (;;) {
     int done = 1;
@@ -122,32 +187,34 @@ void bubble_sort(int *array, unsigned nelem) {
     if (done) break;  // 没有交换才退出
   }
 }
+```
 
 重新编译并运行 KLEE，若修复正确，将不再出现 .assert.err。
 
 ⸻
 
-6.（可选）给输入加约束，控制路径规模
+## 6.（可选）给输入加约束，控制路径规模
 
 输入是 4 个 32 位整型，理论路径空间很大。可像教程二那样加范围约束（例如 [-10, 10]），以削减状态数（内建函数文档见 KLEE Intrinsics）：
 
+```c
 for (int i = 0; i < 4; ++i) {
   klee_assume(input[i] >= -10);
   klee_assume(input[i] <=  10);
 }
-
-
-⸻
-
-7. 常见问答（FAQ）
-	•	Q：为什么不再需要 --external-calls=all/--libc=uclibc？
-A： 因为我们已将 printf 替换为 KLEE 内建输出（klee_warning/klee_print_expr），不再把符号数据传给外部函数。而本程序又没有文件/系统调用，因此最小命令即可完成分析。若将来需要符号化文件/STDIN/命令行参数，请参考 Using a symbolic environment。
-	•	Q：memcpy/memmove/malloc 会不会也算“外部函数”？
-A： memcpy/memmove 在 LLVM 中通常会降为 llvm.memcpy/llvm.memmove intrinsic，KLEE 内置支持；malloc/free 由 KLEE 运行时处理。真正需要小心的是以符号实参调用的外部库函数（本教程里已避免）。
+```
 
 ⸻
 
-8. 清理并多次试验
+## 7. 常见问答（FAQ）
+- Q：为什么不再需要 --external-calls=all/--libc=uclibc？
+  - A： 因为我们已将 printf 替换为 KLEE 内建输出（klee_warning/klee_print_expr），不再把符号数据传给外部函数。而本程序又没有文件/系统调用，因此最小命令即可完成分析。若将来需要符号化文件/STDIN/命令行参数，请参考 Using a symbolic environment。
+- Q：memcpy/memmove/malloc 会不会也算“外部函数”？
+  - A： memcpy/memmove 在 LLVM 中通常会降为 llvm.memcpy/llvm.memmove intrinsic，KLEE 内置支持；malloc/free 由 KLEE 运行时处理。真正需要小心的是以符号实参调用的外部库函数（本教程里已避免）。
+
+⸻
+
+## 8. 清理并多次试验
 
 多次运行会生成 klee-out-0, klee-out-1, ... 与 klee-last。需要重来时：
 
@@ -156,7 +223,7 @@ rm -rf klee-out-* klee-last
 
 ⸻
 
-9. 你将掌握的要点（对应官方教程的综合实践）
+## 9. 你将掌握的要点（对应官方教程的综合实践）
 	1.	把数组整体设为符号变量（参见教程一：https://klee-se.org/tutorials/testing-function/）。
 	2.	用交叉验证（两种排序）构造可判定断言，让 KLEE 自动找出不一致输入。
 	3.	阅读 .err 与 .ktest，并回放失败用例（见 https://klee-se.org/docs/tools/ 与 https://klee-se.org/tutorials/testing-function/）。
