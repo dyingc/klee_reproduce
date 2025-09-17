@@ -93,3 +93,5 @@ RUN ln -s /tmp/klee-uclibc-130/libc; ln -s /tmp/klee_src
 
 USER klee
 
+# 准备`Using Symbolic Environment`的例子
+RUN mkdir -p /tmp/klee_src/examples/password

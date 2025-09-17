@@ -89,7 +89,7 @@ KLEE 会探索多条路径，其中一条路径令符号参数具体化为 "hell
 
 ## 5. `-sym-files` 用法（含 `-sym-stdin`/`-sym-stdout`）
 
-这里是一个新的，文件输入版的 password.c，如果命令行给出文件名就从该文件读；否则回退到标准输入： ￼
+这里是一个新的，文件输入版的 password_files.c，如果命令行给出文件名就从该文件读；否则回退到标准输入： ￼
 
 ```c
 #include <sys/types.h>
@@ -136,8 +136,8 @@ int main(int argc, char **argv) {
 先让 `stdin` 成为符号数据（例如 10 字节），这样程序即使没有成功打开文件也能从 `stdin` 读取“任意”内容： ￼
 
 ```bash
-clang -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone password.c
-klee -posix-runtime password.bc -sym-stdin 10
+clang -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone password_files.c
+klee -posix-runtime password_files.bc -sym-stdin 10
 ```
 
 KLEE 会探索一条使得 `stdin` 前 5 个字节为 "hello" 的路径，并打印 **Password found in standard input**。
@@ -148,7 +148,7 @@ KLEE 会探索一条使得 `stdin` 前 5 个字节为 "hello" 的路径，并打
 例如只要 1 个大小 10 的文件，就这样启动，并把 `A` 当作命令行参数传给程序：
 
 ```bash
-klee -posix-runtime password.bc A -sym-files 1 10
+klee -posix-runtime password_files.bc A -sym-files 1 10
 ```
 
 这会让程序从名为 `A` 的符号文件读取数据；某条路径上其前 `5` 字节具体化为 "hello"，从而打印 **Password found in A**。
