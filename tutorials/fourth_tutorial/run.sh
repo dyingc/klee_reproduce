@@ -14,7 +14,8 @@ docker run --rm --name "klee-dev-${VER}" -it \
   bash -lc 'clang -I ../../include -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone password.c; \
     clang -I ../../include -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone password_files.c; \
     echo "✅ compile done"; \
-    time klee --libc=uclibc --emit-all-errors --only-output-states-covering-new --solver-backend=stp password.bc; \
+    time klee --libc=uclibc -posix-runtime --emit-all-errors --only-output-states-covering-new --solver-backend=stp password.bc -sym-arg 5; \
+    time klee --libc=uclibc -posix-runtime --emit-all-errors --only-output-states-covering-new --solver-backend=stp password_files.bc -sym-stdin 5; \
     time klee --libc=uclibc -posix-runtime --emit-all-errors --only-output-states-covering-new --solver-backend=stp password_files.bc A -sym-files 1 10; \
     echo "✅ run done"; \
     exec bash'

@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
      return 1;
 
   if (check_password(argv[1])) {
-    printf("Password found!\n");
+    // printf("Password found!\n");
     return 0;
   }
 

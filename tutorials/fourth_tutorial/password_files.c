@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
   if (argc >= 2) {
     if ((fd = open(argv[1], O_RDONLY)) != -1) {
       if (check_password(fd)) {
-        printf("Password found in %s\n", argv[1]);
+        // printf("Password found in %s\n", argv[1]);
         close(fd);
         return 0;
       }
@@ -30,7 +30,7 @@ int main(int argc, char **argv) {
   }
 
   if (check_password(0)) { // 0 == stdin
-    printf("Password found in standard input\n");
+    // printf("Password found in standard input\n");
     return 0;
   }
   return 1;

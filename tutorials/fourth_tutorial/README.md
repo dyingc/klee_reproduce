@@ -85,6 +85,35 @@ KLEE 会探索多条路径，其中一条路径令符号参数具体化为 "hell
 - KLEE 探索若干条路径，其中一条路径能让 `argv[1]` 正好匹配 “hello”
 - KLEE 输出消息、生成测试用例等  ￼
 
+### 4.1 回放测试用例（原生二进制 + libkleeRuntest）
+
+做法与教程1一致（“Replaying a test case”）：
+https://klee-se.org/tutorials/testing-function/
+
+```bash
+# 重新编译并链接回放库
+$ pwd
+/tmp/klee_src/examples/password
+$ gcc -I ../../include/ -L /tmp/klee_build130stp_z3/lib -c password.c -o password.o
+$ gcc password.o -o password.out -L /tmp/klee_build130stp_z3/lib -lkleeRuntest && rm -f *.o
+
+# 查看测试用例
+$ ktest-tool klee-last/test000006.ktest
+ktest file : 'klee-last/test000006.ktest'
+args       : ['password.bc', '-sym-arg', '5']
+num objects: 1
+object 0: name: 'arg00'
+object 0: size: 6
+object 0: data: b'hello\xff'
+object 0: hex : 0x68656c6c6fff
+object 0: text: hello.
+
+# 指定要回放的 ktest
+$ KTEST_FILE=klee-last/test000006.ktest ./password.out
+$ echo $?
+1
+```
+
 ⸻
 
 ## 5. `-sym-files` 用法（含 `-sym-stdin`/`-sym-stdout`）
