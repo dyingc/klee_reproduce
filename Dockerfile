@@ -45,6 +45,10 @@ RUN ../configure --disable-nls \
       --prefix=${PREFIX} \
     && make -j"$(nproc)" \
     && make -C src arch hostname
+# 以上命令中，`make -C src arch hostname` 表示切换到 `src` 目录下，只单独编译 arch 和 hostname 两个特定目标
+# 在较新版本的coreutils中，这一步可以跳过，但在某些版本中需要单独构建，以确保生成对应的可执行文件
+# 编译时加入覆盖率追踪: `CFLAGS="-g -fprofile-arcs -ftest-coverage"`
+# 由于有该 CFLAGS 标志，生成的可执行文件会记录执行路径，运行后产生 `.gcda` 文件（覆盖率数据）
 
 # 使用 LLVM 编译 coreutils
 WORKDIR ${homedir}/coreutils-${CU_VER}
@@ -54,6 +58,7 @@ RUN export LLVM_COMPILER=clang && \
     CC=wllvm ../configure --disable-nls CFLAGS="-g -O1 -Xclang -disable-llvm-passes -D__NO_STRING_INLINES  -D_FORTIFY_SOURCE=0 -U__OPTIMIZE__" \
   && make -j"$(nproc)" \
   && make -C src arch hostname
+# 以上命令中，CFLAGS 中的 `-Xclang -disable-llvm-passes` 用于生成 .bc 文件供 KLEE 分析（KLEE无法直接在原生可执行文件上工作）
 
 # 生成 LLVM bitcode 文件
 WORKDIR ${homedir}/coreutils-${CU_VER}/obj-llvm/src
