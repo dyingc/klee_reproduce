@@ -85,19 +85,39 @@ KLEE 会探索多条路径，其中一条路径令符号参数具体化为 "hell
 - KLEE 探索若干条路径，其中一条路径能让 `argv[1]` 正好匹配 “hello”
 - KLEE 输出消息、生成测试用例等  ￼
 
-### 4.1 回放测试用例（原生二进制 + libkleeRuntest）
+### 4.1 回放测试用例（推荐：原生二进制 + klee-replay）
 
-做法与教程1一致（“Replaying a test case”）：
-https://klee-se.org/tutorials/testing-function/
+**为什么用 klee-replay？**
+做法与教程1`不`一致（[Replaying a test case](https://klee-se.org/tutorials/testing-function/)）。这是因为当测试是用 POSIX runtime 生成的（比如命令行里用了 `-posix-runtime`、`-sym-arg`、`-sym-args`、`--sym-stdin`、`--sym-files` 等），.ktest 文件中记录的是“POSIX 语义”的输入：符号化的 argv、stdin、以及虚拟文件的内容与元数据，比如：`['password.bc', '-sym-arg', '5']`。
+klee-replay 会解释这些 POSIX 语义，把 .ktest 中的对象正确注入到原生程序运行时（填好 argv、喂入 stdin、创建并填充文件等）。
+而 -lkleeRuntest + KTEST_FILE=... 不会理解这些 POSIX 选项，它只会把 .ktest 的 args 字段直接当作字符串 argv 传给程序，导致你看到的现象：程序收到的 argv[1] 实际是字面量 "-sym-arg"，而不是被具体化的“hello…”，于是退出码变成 1。
+
+小判别法：ktest-tool 若显示类似：
+args : ['program.bc', '-sym-arg', '5'] / 出现 stdin/A-content 等对象 → 这是 POSIX 测试，用 klee-replay。
+
+步骤：
 
 ```bash
-# 重新编译并链接回放库
-$ pwd
-/tmp/klee_src/examples/password
-$ gcc -I ../../include/ -L /tmp/klee_build130stp_z3/lib -c password.c -o password.o
-$ gcc password.o -o password.out -L /tmp/klee_build130stp_z3/lib -lkleeRuntest && rm -f *.o
+# 在你的容器里
+$ cd /tmp/klee_src/examples/password
 
-# 查看测试用例
+# 1) 编译原生二进制（不要链接 -lkleeRuntest）
+$ gcc -O0 -g password.c -o password_native && ls -l password_native
+-rwxr-xr-x 1 klee klee 17152 Sep 20 00:43 password_native
+
+# 2) 回放指定的 ktest（自动按 POSIX 语义注入 argv/stdin/files）。注意“EXIT STATUS: NORMAL”
+$ klee-replay ./password_native klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Test file: klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Arguments: "./password_native" "hello"
+KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-GwYELV
+KLEE-REPLAY: NOTE: EXIT STATUS: NORMAL (0 seconds)
+KLEE-REPLAY: NOTE: removing /tmp/klee-replay-GwYELV
+```
+
+可选验证：
+
+```bash
+# 看看这个 ktest 是否属于 POSIX 测试（有 -sym-arg / stdin / A-content 等）
 $ ktest-tool klee-last/test000006.ktest
 ktest file : 'klee-last/test000006.ktest'
 args       : ['password.bc', '-sym-arg', '5']
@@ -107,12 +127,9 @@ object 0: size: 6
 object 0: data: b'hello\xff'
 object 0: hex : 0x68656c6c6fff
 object 0: text: hello.
-
-# 指定要回放的 ktest
-$ KTEST_FILE=klee-last/test000006.ktest ./password.out
-$ echo $?
-1
 ```
+
+该 test case 的确产生了`hello`的字符串。
 
 ⸻
 
@@ -166,10 +183,72 @@ int main(int argc, char **argv) {
 
 ```bash
 clang -emit-llvm -c -g -O0 -Xclang -disable-O0-optnone password_files.c
-klee -posix-runtime password_files.bc -sym-stdin 10
+klee --libc=uclibc -posix-runtime password_files.bc -sym-stdin 10
 ```
 
 KLEE 会探索一条使得 `stdin` 前 5 个字节为 "hello" 的路径，并打印 **Password found in standard input**。
+
+#### 5.1.1 测试用例结果
+
+```bash
+# 看看这个 ktest 是否属于 POSIX 测试（有 -sym-arg / stdin / A-content 等）
+$ ktest-tool klee-last/test000005.ktest
+ktest file : 'klee-last/test000005.ktest'
+args       : ['password_files.bc', '-sym-stdin', '10']
+num objects: 2
+object 0: name: 'stdin'
+object 0: size: 10
+object 0: data: b'hello\xff\xff\xff\xff\xff'
+object 0: hex : 0x68656c6c6fffffffffff
+object 0: text: hello.....
+object 1: name: 'stdin_stat'
+object 1: size: 144
+object 1: data: b'w\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\xff\xff\xff\xff\x01\x00\x00\x00\x00\x00\x00\x00\xa4\x81\x00\x00\xe8\x03\x00\x00\xe8\x03\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x10\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff>\n\xceh\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xffL\x0c\xceh\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xffL\x0c\xceh\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+object 1: hex : 0x770000000000000001000000ffffffff0100000000000000a4810000e8030000e8030000ffffffff0000000000000000ffffffffffffffff0010000000000000ffffffffffffffff3e0ace6800000000ffffffffffffffff4c0cce6800000000ffffffffffffffff4c0cce6800000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+object 1: text: w.......................................................................>..h............L..h............L..h....................................
+```
+
+**结果解析**：
+
+- 两个对象是什么？
+- stdin（size=10）：符号化标准输入的内容。前 5 个字节被约束为 "hello"；后 5 个字节程序未使用，保持不受约束，因此被实例化为 0xff 占位。
+- stdin_stat（size=144）：fd=0 的元数据（类似 fstat 信息，mode/uid/gid/timestamps 等）。你的程序不读它，所以绝大多数字段保持不受约束（很多 0xff）。
+- 它如何满足路径条件？
+	1.	argc < 2（没有文件名参数）→ 走 check_password(0) 分支。
+	2.	read(0, buf, 5) != -1（POSIX 模型里有足够字节可读）。
+	3.	约束：buf[0..4] == "hello"。
+求解器据此给 stdin[0..4] 具体化为 68 65 6c 6c 6f，其余字节自由，随意取 ff。
+- 和 angr 的对应：
+等价于 state.posix.stdin = BVS(8*10) 并添加约束 stdin[0..4] == b"hello"；后续字节未约束。
+
+### 5.1.2 回放测试用例
+
+步骤：
+
+```bash
+# 在你的容器里
+$ cd /tmp/klee_src/examples/password
+
+# 1) 编译原生二进制（不要链接 -lkleeRuntest）
+$ gcc -O0 -g password_files.c -o password_files_native && ls -l password_files_native
+-rwxr-xr-x 1 klee klee 18032 Sep 20 02:10 password_files_native
+
+# 2) 回放指定的 ktest（自动按 POSIX 语义注入 argv/stdin/files）。注意“EXIT STATUS: NORMAL”
+$ klee-replay ./password_files_native klee-last/test000005.ktest
+KLEE-REPLAY: NOTE: Test file: klee-last/test000005.ktest
+KLEE-REPLAY: NOTE: Arguments: "./password_files_native"
+KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-w2KhIR
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-w2KhIR/fd0 of length 10
+KLEE-REPLAY: NOTE: EXIT STATUS: NORMAL (0 seconds)
+KLEE-REPLAY: NOTE: removing /tmp/klee-replay-w2KhIR
+$ klee-replay ./password_files_native klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Test file: klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Arguments: "./password_files_native"
+KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-FtlB4n
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-FtlB4n/fd0 of length 10
+KLEE-REPLAY: NOTE: EXIT STATUS: ABNORMAL 1 (0 seconds)
+KLEE-REPLAY: NOTE: removing /tmp/klee-replay-FtlB4n
+```
 
 ### 5.2 用 `-sym-files` 提供符号文件
 
@@ -177,12 +256,105 @@ KLEE 会探索一条使得 `stdin` 前 5 个字节为 "hello" 的路径，并打
 例如只要 1 个大小 10 的文件，就这样启动，并把 `A` 当作命令行参数传给程序：
 
 ```bash
-klee -posix-runtime password_files.bc A -sym-files 1 10
+klee --libc=uclibc -posix-runtime password_files.bc A -sym-files 1 10
 ```
 
 这会让程序从名为 `A` 的符号文件读取数据；某条路径上其前 `5` 字节具体化为 "hello"，从而打印 **Password found in A**。
 
 `-sym-stdout` 也可以一起用，把标准输出当成符号化的“外部交互”，但在本示例中非必需。 ￼
+
+#### 5.2.1 测试用例结果
+
+```bash
+# 看看这个 ktest 是否属于 POSIX 测试（有 -sym-arg / stdin / A-content / -sym-files 等）
+$ ktest-tool klee-last/test000005.ktest
+ktest file : 'klee-last/test000005.ktest'
+args       : ['password_files.bc', 'A', '-sym-files', '1', '10']
+num objects: 2
+object 0: name: 'A_data'
+object 0: size: 10
+object 0: data: b'hello\xff\xff\xff\xff\xff'
+object 0: hex : 0x68656c6c6fffffffffff
+object 0: text: hello.....
+object 1: name: 'A_data_stat'
+object 1: size: 144
+object 1: data: b'w\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\xff\xff\xff\xff\x01\x00\x00\x00\x00\x00\x00\x00\xa4\x81\x00\x00\xe8\x03\x00\x00\xe8\x03\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x10\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xffW\r\xceh\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x99\x0f\xceh\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x99\x0f\xceh\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+object 1: hex : 0x770000000000000001000000ffffffff0100000000000000a4810000e8030000e8030000ffffffff0000000000000000ffffffffffffffff0010000000000000ffffffffffffffff570dce6800000000ffffffffffffffff990fce6800000000ffffffffffffffff990fce6800000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+object 1: text: w.......................................................................W..h...............h...............h....................................
+```
+
+**说明**：
+
+- args：['password_files.bc', 'A', '-sym-files', '1', '10']
+表示 POSIX runtime 创建了 1 个大小为 10 字节、名为 A 的符号文件，并把 "A" 作为 argv[1] 传给程序。
+- A_data（size=10）：文件 A 的内容。
+前 5 字节被求解为 "hello" 以满足分支；后 5 字节程序未使用，保持不受约束，实例化为 0xff。
+- A_data_stat（size=144）：文件 A 的元数据（相当于 struct stat：类型、权限、时间戳等）。
+程序不读这些字段，所以多数保持不受约束（大量 0xff）；KLEE 仅保证“存在、可读、长度=10”等使 open/read 成功的最小一致性。
+- 为何满足路径条件
+	1.	argc >= 2 且 argv[1]=="A"；
+	2.	open("A", O_RDONLY) != -1；
+	3.	read(fd, buf, 5) != -1 且读到的 buf[0..4] == "hello"；
+⇒ check_password 返回 1，主程序返回 0。
+- 与 angr 类比：等价于 SimFile('A', content=BVS(80))，并加约束 content[0..4]=="hello"；其余字节自由。
+
+### 5.2.2 回放测试用例
+
+步骤：
+
+```bash
+# 在你的容器里
+$ cd /tmp/klee_src/examples/password
+
+# 1) 编译原生二进制（不要链接 -lkleeRuntest）
+$ gcc -O0 -g password_files.c -o password_files_native && ls -l password_files_native
+-rwxr-xr-x 1 klee klee 18032 Sep 20 02:10 password_files_native
+
+# 2) 回放指定的 ktest（自动按 POSIX 语义注入 argv/stdin/files）。注意“EXIT STATUS: NORMAL”
+$ klee-replay ./password_files_native klee-last/test000005.ktest
+KLEE-REPLAY: NOTE: Test file: klee-last/test000005.ktest
+KLEE-REPLAY: NOTE: Arguments: "./password_files_native"
+KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-w2KhIR
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-w2KhIR/fd0 of length 10
+KLEE-REPLAY: NOTE: EXIT STATUS: NORMAL (0 seconds)
+KLEE-REPLAY: NOTE: removing /tmp/klee-replay-w2KhIR
+$ klee-replay ./password_files_native klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Test file: klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Arguments: "./password_files_native"
+KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-FtlB4n
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-FtlB4n/fd0 of length 10
+KLEE-REPLAY: NOTE: EXIT STATUS: ABNORMAL 1 (0 seconds)
+KLEE-REPLAY: NOTE: removing /tmp/klee-replay-FtlB4n
+```
+
+**结果解析**：
+
+- args：['password_files.bc', 'A', '-sym-files', '1', '10']
+表示 POSIX runtime 创建了 1 个大小为 10 字节、名为 A 的符号文件（暂存于诸如 `/tmp/klee-replay-pHW7Aq/A` 的路径），并把 "A" 作为 argv[1] 传给程序。
+- A_data（size=10）：文件 A 的内容。
+前 5 字节被求解为 "hello" 以满足分支；后 5 字节程序未使用，保持不受约束，实例化为 0xff。
+- A_data_stat（size=144）：文件 A 的元数据（相当于 struct stat：类型、权限、时间戳等）。
+程序不读这些字段，所以多数保持不受约束（大量 0xff）；KLEE 仅保证“存在、可读、长度=10”等使 open/read 成功的最小一致性。
+- 为何满足路径条件
+	1.	argc >= 2 且 argv[1]=="A"；
+	2.	open("A", O_RDONLY) != -1；
+	3.	read(fd, buf, 5) != -1 且读到的 buf[0..4] == "hello"；
+⇒ check_password 返回 1，主程序返回 0。
+- 与 angr 类比：等价于 SimFile('A', content=BVS(80))，并加约束 content[0..4]=="hello"；其余字节自由。
+
+**查看打开文件**
+
+```bash
+# 的确打开文件“/tmp/klee-replay-pHW7Aq/A”并写入/读入了 "hello"
+$ strace -f -e openat,read,write,close,unlink -s 64 -o /tmp/aaa klee-replay ./password_files_native klee-last/test000005.ktest >/dev/null 2>&1 && cat /tmp/aaa | grep hello -B1 -A1
+1121  openat(AT_FDCWD, "/tmp/klee-replay-pHW7Aq/A", O_RDWR|O_CREAT, 0644) = 3
+1121  write(3, "hello\377\377\377\377\377", 10) = 10
+1121  close(3)                          = 0
+--
+1123  openat(AT_FDCWD, "A", O_RDONLY)   = 3
+1123  read(3, "hello", 5)               = 5
+1123  close(3)                          = 0
+```
 
 ⸻
 

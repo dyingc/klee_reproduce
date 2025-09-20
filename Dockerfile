@@ -70,7 +70,7 @@ RUN set -eux; \
     mkdir -p /tmp/kitware-src-backup; \
     mv /etc/apt/sources.list.d/*kitware*.list /tmp/kitware-src-backup/ || true; \
     apt-get update; \
-    apt-get install -y --no-install-recommends kcachegrind valgrind xvfb x11vnc xfce4 x11-apps dbus-x11; \
+    apt-get install -y --no-install-recommends kcachegrind valgrind xvfb x11vnc xfce4 x11-apps dbus-x11 strace; \
     rm -rf /var/lib/apt/lists/*; \
     # 安装完再移回来
     mv /tmp/kitware-src-backup/* /etc/apt/sources.list.d/ 2>/dev/null || true; \
