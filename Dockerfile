@@ -94,7 +94,7 @@ COPY --from=coreutils_builder --chown=klee:klee /usr/bin/gcov /usr/bin/gcov
 WORKDIR ${homedir}/coreutils-${CU_VER}/obj-llvm/src
 
 # 准备显示 source code
-RUN ln -s /tmp/klee-uclibc-130/libc; ln -s /tmp/klee_src
+RUN ln -s /tmp/klee-uclibc-130/libc; ln -s /tmp/klee_src; ln -s /usr/bin/python3 /usr/bin/python
 
 USER klee
 

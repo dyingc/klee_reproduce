@@ -1,7 +1,14 @@
 # KLEE 符号执行实验完整复现指南
 
-- [OSDI'08 Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)：说明 KLEE 在 [OSDI’08 论文](https://llvm.org/pubs/2008-12-OSDI-KLEE.pdf) 中用于实验 GNU Coreutils 的具体构建环境、软件版本、测试工具与参数配置等细节。
+## 0. 参考资料
+- [OSDI'08 Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)：说明 KLEE 在 [OSDI'08 论文](https://llvm.org/pubs/2008-12-OSDI-KLEE.pdf) 中用于实验 GNU Coreutils 的具体构建环境、软件版本、测试工具与参数配置等细节。
 - [Using KLEE with Docker](https://klee-se.org/docker/)：介绍如何通过 Docker 容器快速获取、运行与使用 KLEE，包括拉取镜像、创建容器和持久化使用等实用操作说明。
+- [KLEE's main command-line options](https://klee-se.org/docs/options/)：详细说明了 KLEE 的各种命令行选项，包括输出控制、符号环境设置、搜索策略、约束求解、外部函数调用策略、调试选项、内存管理、统计信息和执行树控制等配置参数。
+- [KLEE intrinsic functions](https://klee-se.org/docs/intrinsics/)：介绍了 KLEE 符号执行引擎的内置函数（intrinsics），主要包括 `klee_assume(condition)` 用于约束符号变量的取值范围，以及 `klee_prefer_cex(object, condition)` 用于在生成测试用例时偏好特定值，同时详细解释了这些函数的使用方法和注意事项。
+- [Auxiliary tools provided by KLEE](https://klee-se.org/docs/tools/)：介绍了 KLEE 符号执行引擎提供的辅助工具集，包括：`ktest-tool` 用于将 .ktest 文件转换为人类可读格式，`klee-stats` 用于提取和展示统计信息，`ktest-gen` 用于从具体输入生成 .ktest 文件，`ktest-randgen` 用于生成随机. ktest 文件，以及 `klee-exec-tree` 用于显示执行树的各种统计信息。
+- [KLEE solver chain and related command-line options](https://klee-se.org/docs/solver-chain/)：详细介绍了 KLEE 的求解器链（solver chain）架构和相关配置选项，包括：核心求解器（MetaSMT、STP、Z3）的具体配置参数，缓存求解器（分支缓存、反例缓存）的使用方法，独立性求解器用于拆分独立约束集，以及各种调试求解器（赋值验证、调试验证、查询日志等）的配置选项。
+- [Kleaver’s main command-line options](https://klee-se.org/docs/kleaver-options/)：KQuery 语言的参考手册，详细介绍了 KLEE 约束求解器使用的文本表示格式，包括：基本语法结构、数组声明、查询命令、版本管理、各种表达式类型（算术运算、位运算、比较运算、位向量操作等），以及特殊表达式如 `Read`、`Select` 和一些宏表达式。
+- [KQuery language](https://klee-se.org/docs/kquery/)：简要介绍了 `Kleaver`（KLEE 的独立约束求解器工具）的主要命令行选项，包括：基本用法格式、处理 KQuery 格式文件的解析优化选项（如 `-clear-array-decls-after-query` 用于处理独立查询以减少内存占用）、支持多种后端SMT求解器、以及查询日志记录功能（通过 `-query-log-dir` 指定日志存储位置）。
 
 [官方教程](https://klee-se.org/tutorials/testing-coreutils/)
 
@@ -161,7 +168,12 @@ $ sed 's/#define INPUT_FILE_SIZE_GUESS.*/#define INPUT_FILE_SIZE_GUESS 1024/g' -
 ### 3.1 进入 KLEE 容器环境
 ```bash
 # 启动容器
-$ docker run --rm -it -e DISPLAY=:1 --ulimit='stack=-1:-1' -v /tmp/.X11-unix:/tmp/.X11-unix:rw klee-coreutils:${VER} bash
+$ docker run --rm -it -e DISPLAY=:1 \
+    --ulimit='stack=-1:-1' \
+    -w /home/klee/coreutils-6.11/obj-llvm/src \
+    -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+    klee-coreutils:${VER} \
+    bash
 ```
 
 ### 3.2 准备测试环境
@@ -181,6 +193,16 @@ PWD=/tmp/sandbox
 EOF
 ```
 
+**说明**（为何需要 test.env）
+
+这个文件定义了 KLEE POSIX 运行时启动时加载的一个最小、可复现实验环境（配合 `--env-file` 使用），并与 `--run-in-dir=/tmp/sandbox` 搭配，让被测程序始终在受控目录中运行，避免读取宿主机的 `~/.bashrc`、用户配置或随机路径，从而消除非确定性与副作用。当前三项含义：
+
+- PATH=/usr/bin:/bin：只保留系统基础路径，避免误调用宿主上其它可执行文件；
+- HOME=/tmp/sandbox：把家目录指向沙盒，防止向真实 $HOME 读写；
+- PWD=/tmp/sandbox：与 `--run-in-dir` 保持一致，保证 getcwd() 与相对路径行为一致。
+
+如需更强可重复性，可再加入 `LANG=C`/`LC_ALL=C` 以屏蔽本地化差异（对 `sort`/`printf` 一类命令尤为有用）。参考：官方 Coreutils 复现实验使用相同思路生成 test.env 并在沙盒中运行；`--env-file`/`--run-in-dir` 为 KLEE 的标准启动选项。 ￼  ￼
+
 ### 3.3 基础符号执行实验
 
 **最简单的符号执行示例（echo工具）：**
@@ -188,6 +210,8 @@ EOF
 $ cd /home/klee/coreutils-6.11/obj-llvm/src
 $ klee --libc=uclibc --posix-runtime ./echo.bc --sym-args 0 1 10
 ```
+
+最小示例，只给 echo 一个符号化命令行参数（0~1 个参数，长度最多 10 字符），用来演示 KLEE 如何探索输入空间。
 
 **标准符号参数配置：**
 ```bash
@@ -198,6 +222,22 @@ $ klee --libc=uclibc --posix-runtime \
     ./echo.bc \
     --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
 ```
+
+这是 [OSDI'08 论文](https://llvm.org/pubs/2008-12-OSDI-KLEE.pdf) 的标准配置。它不仅符号化命令行参数，还符号化文件、标准输入/输出，并在受控的沙盒环境中运行，以覆盖更多 I/O 相关路径，复现论文中的 Coreutils 实验效果。
+
+符号输入参数解释
+
+- `--sym-args 0 1 10`：允许 0~1 个命令行参数，每个长度最多 10 字符。注意，在 [OSDI'08 论文](https://llvm.org/pubs/2008-12-OSDI-KLEE.pdf) 中，实际使用的只有一个参数：`--sym-args 1 10 10`
+- `--sym-args 0 2 2`：再额外允许 0~2 个命令行参数，每个长度最多 2 字符。双 `--sym-args` 只出现在 [Coreutils 实验（OSDI'08 附加资料）](https://klee-se.org/docs/coreutils-experiments/) 中。这个是通过叠加多组参数规则，组1：0~1个长参数（≤10字符），组2：0~2个短参数（≤2字符），来更精细地模拟“少量长参数 + 多个短参数”的情况。在 Coreutils 里，这很有用：
+    - **长参数**（比如 --version、--help）一般比较长。
+	- **短选项**（比如 -a, -l）往往只有 1~2 个字符。
+
+    用两次 --sym-args，就能同时探索这两类输入。
+- `--sym-files 1 8`：创建 1 个符号化文件（名字为 A），大小 8 字节。
+- `--sym-stdin 8`：标准输入符号化，大小 8 字节。
+- `--sym-stdout`：标准输出也符号化，用于探索写出不同结果的路径。
+
+这些参数组合起来，可以让 KLEE 模拟命令行参数、输入文件、标准输入输出等多种来源，从而覆盖 Coreutils 工具的大部分行为。
 
 ### 3.4 高级符号执行配置
 
@@ -216,26 +256,62 @@ $ klee --simplify-sym-indices --write-cvcs --write-cov --output-module \
     ./echo.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
 ```
 
-#### 3.4.1 通用参数
+#### 3.4.1 通用参数（分组）
 
-- `--libc=uclibc`: 使用uClibc库，提供POSIX兼容性
-- `--posix-runtime`: 启用POSIX运行时环境支持
-- `--optimize`: 启用死代码消除等优化
-- `--only-output-states-covering-new`: 仅输出覆盖新代码的状态
-- `--max-memory=1000`: 限制内存使用（MB）
-- `--max-time=60min`: 设置最大执行时间
-- `--search=random-path`: 使用随机路径搜索策略
-- `--use-batching-search`: 启用批量搜索优化
+##### 执行环境配置
+| 参数 | 功能 | 作用 |
+|------|------|------|
+| `--libc=uclibc` | 使用 klee-uclibc 库 | 提供 POSIX 兼容的 C 标准库支持，避免外部未建模函数导致路径终止 [LLVM 2.9](https://klee-se.org/releases/docs/v1.3.0/build-llvm29) |
+| `--posix-runtime` | 启用 POSIX 运行时 | 支持命令行参数、环境变量、文件系统模型，便于真实程序测试 [Tutorial](https://klee-se.org/tutorials/testing-coreutils/) |
+| `--env-file=/tmp/sandbox/test.env` | 环境变量文件 | 从 `test.env` 读取固定环境变量，保证实验可复现 |
+| `--run-in-dir=/tmp/sandbox` | 沙盒目录 | 在指定目录下运行，被测程序与宿主机隔离，保证可重复性 |
+
+##### 符号执行优化
+| 参数 | 功能 | 作用 |
+|------|------|------|
+| `--simplify-sym-indices` | 符号索引简化 | 对数组索引和复杂表达式进行归约，减少约束复杂度 |
+| `--disable-inlining` | 禁止函数内联 | 保持函数调用边界，便于覆盖率统计和调试 |
+| `--optimize` | 启用优化 | 在执行前对 bitcode 运行 LLVM 优化（死代码消除、常量折叠），减少冗余路径 [Coreutils Tutorial](https://klee-se.org/tutorials/testing-coreutils/) |
+| `--write-cvcs` / `--write-cov` / `--output-module` | 输出调试与覆盖率数据 | 生成约束日志（CVC/KQuery）、覆盖率片段和最终 LLVM IR，便于复现实验与调试 |
+
+##### 求解器与内存管理
+| 参数 | 功能 | 作用 |
+|------|------|------|
+| `--use-forked-solver` | 独立进程调用约束求解器 | 在子进程中运行 SMT solver，避免内存泄漏或崩溃影响主进程 [Solver Chain](https://klee-se.org/docs/solver-chain/) |
+| `--use-cex-cache` | Counterexample 缓存 | 缓存之前的可满足赋值（counterexamples），避免重复求解 [Solver Chain](https://klee-se.org/docs/solver-chain/) |
+| `--external-calls=all` | 允许外部函数调用 | 对所有外部函数调用进行“具体化”，保证程序能继续运行 [Options](https://klee-se.org/docs/options) |
+| `--max-solver-time=30s` | 单次求解器上限 | 每个约束查询最多 30 秒，防止求解卡死 [Solver Chain](https://klee-se.org/docs/solver-chain/) |
+| `--max-sym-array-size=4096` | 符号数组大小限制 | 限制符号数组的最大字节数，防止约束爆炸 |
+| `--max-memory=1000` | 最大内存限制 | 限制 KLEE 总内存消耗为 1000 MB，避免 OOM 崩溃 |
+| `--max-memory-inhibit=false` | 内存溢出策略 | 内存超限时继续运行（丢弃部分状态）而非立即终止 |
+| `--watchdog` | 守护进程 | 监控 KLEE 主进程，超时或崩溃时强制终止 |
+| `--max-time=60min` | 最大执行时间 | 限制整体探索时长为 60 分钟，避免无限运行 |
+| `--max-static-fork-pct=1` / `--max-static-solve-pct=1` / `--max-static-cpfork-pct=1` | 静态比例参数 | 限制单个状态在分叉、求解和约束传播中的资源占用比例，避免“资源垄断” |
+
+##### 搜索与调度策略
+| 参数 | 功能 | 作用 |
+|------|------|------|
+| `--switch-type=internal` | 状态切换策略 | 使用内部调度器控制状态切换方式 |
+| `--search=random-path` | 随机路径搜索 | 从路径树随机选择一条路径继续探索，避免路径爆炸 [Options](https://klee-se.org/docs/options) |
+| `--search=nurs:covnew` | NURS 策略 | 非均匀随机搜索，优先选择能覆盖新指令的状态，提高覆盖率 [Options](https://klee-se.org/docs/options) |
+| `--use-batching-search` + `--batch-instructions=10000` | 批量执行 | 每个状态连续运行 10000 条指令再切换，减少调度开销 [Options](https://klee-se.org/docs/options) |
+| `--only-output-states-covering-new` | 限制输出状态 | 仅保存覆盖新代码行或触发错误的状态，减少冗余测试 [Tutorial](https://klee-se.org/tutorials/testing-coreutils/) |
 
 #### 3.4.2 符号参数策略详解
 
-**符号参数语法：**
-```bash
---sym-args MIN_ARGC MAX_ARGC MAX_ARG_LEN  # 符号命令行参数
---sym-files N MAX_SIZE                    # N个符号文件，每个最大MAX_SIZE字节
---sym-stdin MAX_SIZE                      # 符号标准输入，最大MAX_SIZE字节
---sym-stdout                              # 符号标准输出
-```
+| 参数 | 功能 | 作用 | 示例 |
+|------|------|------|------|
+| `--sym-args MIN MAX LEN` | 符号化命令行参数 | 生成 **MIN~MAX 个参数**，每个最大长度为 LEN。可多次使用以模拟不同类别参数（如短选项与长选项）。 | `--sym-args 0 1 10` → 允许 0~1 个长参数（≤10 字符）。<br>`--sym-args 0 2 2` → 允许 0~2 个短参数（≤2 字符）。 [Options](https://klee-se.org/docs/options) |
+| `--sym-files N SIZE` | 符号化文件 | 创建 **N 个符号文件**（命名为 `A`、`B`、…），每个最大 SIZE 字节。 | `--sym-files 1 8` → 创建 1 个 8 字节大小的符号文件 `A`。 [Options](https://klee-se.org/docs/options) |
+| `--sym-stdin SIZE` | 符号化标准输入 | 将标准输入建模为符号数据，最大 SIZE 字节。 | `--sym-stdin 8` → 符号化输入最多 8 字节。 [Options](https://klee-se.org/docs/options) |
+| `--sym-stdout` | 符号化标准输出 | 将标准输出符号化，探索不同输出路径。 | `--sym-stdout` → 所有写入 stdout 的内容均符号化。 [Options](https://klee-se.org/docs/options) |
+
+---
+
+**`--sym-args` 参数的一次写法 vs 多次写法：**
+
+- **一次写法**（如 `--sym-args 1 3 5`）：所有参数统一长度限制（≤5），简单但不灵活。
+- **多次写法**（如 `--sym-args 0 1 10 --sym-args 0 2 2`）：可同时建模“长选项”（如 `--help`）和“短选项”（如 `-a`、`-l`），更贴近真实命令行使用习惯，覆盖率更高 [OSDI'08 Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)。
 
 **89个工具的标准配置：**
 ```bash
@@ -243,19 +319,20 @@ $ klee --simplify-sym-indices --write-cvcs --write-cov --output-module \
 --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout
 ```
 
-**特殊工具的扩展配置：**
+**特殊工具的扩展配置：** [Coreutils Experiments](https://klee-se.org/docs/coreutils-experiments/)
 - **dd**: `--sym-args 0 3 10 --sym-files 1 8 --sym-stdin 8 --sym-stdout`
 - **dircolors**: `--sym-args 0 3 10 --sym-files 2 12 --sym-stdin 12 --sym-stdout`
 - **echo**: `--sym-args 0 4 300 --sym-files 2 30 --sym-stdin 30 --sym-stdout`
 - **expr**: `--sym-args 0 1 10 --sym-args 0 3 2 --sym-stdout`
+- **mknod**: `--sym-args 0 1 10 --sym-args 0 3 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout`
+- **od**: `--sym-args 0 3 10 --sym-files 2 12 --sym-stdin 12 --sym-stdout`
+- **pathchk**: `--sym-args 0 1 2 --sym-args 0 1 300 --sym-files 1 8 --sym-stdin 8 --sym-stdout`
 - **printf**: `--sym-args 0 3 10 --sym-files 2 12 --sym-stdin 12 --sym-stdout`
-- **sort**: 需要添加 `--parallel=1` 参数禁用多线程
-- **ptx**: `--sym-args 0 2 10 --sym-files 2 8 --sym-stdin 8 --sym-stdout`
-- **md5sum**: `--sym-args 0 1 10 --sym-files 2 8`
+- **sort**: KLEE 不支持多线程，需禁用，因此，需在标准配置上添加：`--parallel=1`
 
 ### 3.5 实际测试示例
 
-**测试echo工具：**
+**测试 `echo` 工具：**
 ```bash
 $ klee --libc=uclibc --posix-runtime \
     --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
@@ -263,13 +340,30 @@ $ klee --libc=uclibc --posix-runtime \
     ./echo.bc --sym-args 0 4 300 --sym-files 2 30 --sym-stdin 30 --sym-stdout
 ```
 
-**测试sort工具（需要特殊处理）：**
+**测试 `sort` 工具（需要特殊处理）：**
 ```bash
 $ klee --libc=uclibc --posix-runtime \
     --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
     --max-time=60min --optimize --only-output-states-covering-new \
     ./sort.bc --sym-args 0 1 10 --sym-args 0 2 2 --sym-files 1 8 --sym-stdin 8 --sym-stdout -- --parallel=1
 ```
+
+**注意**：在 KLEE 的命令行中，参数分为三类：
+
+1. **KLEE 自身选项**：如 `--libc=uclibc --posix-runtime --optimize`，由 KLEE 解析。
+2. **POSIX runtime 符号化选项**：如 `--sym-args --sym-files --sym-stdin --sym-stdout`，用于构建符号环境。
+3. **被测程序参数**：传递给 `<program>.bc` 的真实命令行参数。
+
+`--` 的作用：
+- 作为分隔符，告诉 KLEE：后面的内容不再是它的选项，而是要传给被测程序的参数。
+- 例如：
+  ```bash
+  klee ... ./sort.bc --sym-args 0 2 3 -- --parallel=1
+  ```
+
+    -   --sym-args 0 2 3 → KLEE 的 POSIX runtime 参数
+    -   -- → 分隔符
+    -   --parallel=1 → 传递给 sort 程序，用于禁用多线程（KLEE 不支持线程）。
 
 ### 3.6 测试监控与结果分析
 
@@ -285,17 +379,33 @@ $ watch -n 5 'klee-stats klee-last'
 ```
 
 **典型统计信息含义：**
-```
+
+[klee-stats](https://klee-se.org/docs/tools/#klee-stats)
+
+```bash
+--------------------------------------------------------------------------
 | Path     | Instrs  | Time(s) | ICov(%) | BCov(%) | ICount | TSolver(%) |
 |----------|---------|---------|---------|---------|--------|------------|
 |klee-last | 52417   | 121.3   | 84.25   | 65.1    | 204    | 48.2       |
+--------------------------------------------------------------------------
 ```
-- **Instrs**: 执行的LLVM指令数
-- **Time(s)**: 总执行时间
-- **ICov(%)**: 指令覆盖率
-- **BCov(%)**: 分支覆盖率
-- **ICount**: 生成的测试用例数
-- **TSolver(%)**: 约束求解器时间占比
+- **Instrs**: 执行的 LLVM 指令数（动态执行次数）。
+- **Time(s)**: 总执行时间。
+- **ICov(%)**: 指令覆盖率（已覆盖 LLVM 指令数 ÷ ICount）。
+- **BCov(%)**: 分支覆盖率（已覆盖分支数 ÷ 分支总数）。
+- **ICount**: 程序中 LLVM bitcode 的静态指令总数。
+- **TSolver(%)**: 约束求解器时间占比（solver 消耗的时间 / 总时间）。
+
+`Instrs` vs `ICount`
+
+| 字段 | 类型 | 含义 | 举例 |
+|------|------|------|------|
+| **Instrs** | 动态 | **执行过的 LLVM 指令数**（随路径和探索深度增长） | 如果 KLEE 执行了 10 条路径，每条路径平均 5000 条指令 → Instrs ≈ 50,000 |
+| **ICount** | 静态 | **程序 bitcode 中的 LLVM 指令总数**（固定不变） | 对于 coreutils 的 `echo.bc`，可能只有 ~200 条指令，无论执行多少次都保持不变 |
+
+📌 **总结**：
+- `Instrs` = “跑了多少步”（实际执行量，动态）。
+- `ICount` = “赛道有多长”（代码体量，静态）。
 
 #### 3.6.2 高级可视化分析
 
