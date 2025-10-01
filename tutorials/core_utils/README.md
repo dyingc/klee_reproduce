@@ -365,9 +365,105 @@ $ klee --libc=uclibc --posix-runtime \
     -   -- → 分隔符
     -   --parallel=1 → 传递给 sort 程序，用于禁用多线程（KLEE 不支持线程）。
 
-### 3.6 测试监控与结果分析
+### 3.6 附加测试（以 echo_challenge2.c 为例）
 
-#### 3.6.1 监控和统计
+#### 3.6.1 编译 echo_challenge2.bc
+
+在容器里（或主机映射到容器）使 `/home/klee/coreutils-6.11/obj-llvm/src/echo_challenge2.c` 可见，然后：
+
+```bash
+# 进入 Coreutils 工作目录
+cd /home/klee/coreutils-6.11
+
+# 创建沙盒测试环境
+mkdir -p /tmp/sandbox
+
+# 创建环境变量文件
+cat > /tmp/sandbox/test.env << 'EOF'
+PATH=/usr/bin:/bin
+HOME=/tmp/sandbox
+PWD=/tmp/sandbox
+EOF
+
+# 直接编译 bitcode（保留 KLEE 官方教程建议的编译选项习惯）
+clang -O1 -Xclang -disable-llvm-passes \
+  -D__NO_STRING_INLINES -D_FORTIFY_SOURCE=0 -U__OPTIMIZE__ \
+  -emit-llvm -c src/echo_challenge2.c -o obj-llvm/src/echo_challenge2.bc
+
+# 编译一个 ASan 原生可执行文件，便于对照回放/崩溃现场
+clang -fsanitize=address -g -O0 src/echo_challenge2.c -o obj-llvm/src/echo_challenge2_asan
+```
+
+说明：
+
+- `-emit-llvm -c` 直接生成 单模块 .bc（KLEE 会在 `--libc=uclibc --posix-runtime` 下链接运行时，不需要你静态把 uClibc 链进去）。
+- 保留 `-O1 -Xclang -disable-llvm-passes` 的组合，避免 `-O0` 带来的 optnone 影响；同时去掉安全替换（`__fprintf_chk` 等）以匹配 KLEE 的建模习惯。
+- 你已有的 Coreutils 树与 Docker 环境无需改 build system；适合"挑战程序"独立编译。
+
+#### 3.6.2 测试 echo_challenge2 工具：
+
+```bash
+cd /home/klee/coreutils-6.11/obj-llvm/src
+klee --libc=uclibc --posix-runtime \
+    --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
+    --max-time=1min --optimize --only-output-states-covering-new \
+    ./echo_challenge2.bc \
+    --sym-args 0 1 10 --sym-args 0 2 2 \
+    --sym-files 1 8 --sym-stdin 8 --sym-stdout
+```
+
+运行后，KLEE 会生成类似如下的警告与错误：
+
+```
+warning: Linking two modules of different target triples...
+KLEE: WARNING ONCE: Alignment of memory from call "malloc" is not modelled.
+option -r requires a number
+usage: echo_challenge [-n] [-r N] [args...]
+KLEE: ERROR: libc/string/strlen.c:22: memory error: use after free
+KLEE: NOTE: now ignoring this error at this location
+...
+KLEE: HaltTimer invoked
+KLEE: halting execution, dumping remaining states
+
+KLEE: done: total instructions = 450338
+KLEE: done: completed paths = 291
+KLEE: done: partially completed paths = 883
+KLEE: done: generated tests = 24
+```
+可以看到，KLEE 在自动探索时检测到了 use-after-free 等内存错误，并为其生成了对应的 .ktest 文件。
+随后，你可以使用 ktest-tool 查看具体输入，或用 klee-replay 在编译好的原生 echo_challenge2 上重现问题。
+
+#### 3.6.3 使用 ASan 版本重现错误
+
+为了获得更详细的崩溃信息和调试上下文，可以使用 `klee-replay` 工具配合 ASan 版本的可执行文件来重现 KLEE 发现的错误：
+
+```bash
+# 查看某个触发错误的测试用例
+$ ktest-tool klee-last/test000006.ktest
+
+# 使用 klee-replay 在 ASan 版本上重现错误
+$ klee-replay ./echo_challenge2_asan klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Test file: klee-last/test000006.ktest
+KLEE-REPLAY: NOTE: Arguments: "./echo_challenge2_asan" ""
+KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-j9YDY3
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-j9YDY3/A of length 8
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-j9YDY3/fd0 of length 8
+KLEE-REPLAY: NOTE: Creating file /tmp/klee-replay-j9YDY3/fd1 of length 1024
+=================================================================
+==2264==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010 at pc 0x0000004500d4 bp 0x7ffee6bcd030 sp 0x7ffee6bcc7e0
+READ of size 2 at 0x602000000010 thread T0
+```
+
+从 ASan 的输出可以看到：
+- **错误类型**：`heap-use-after-free`（堆内存释放后使用）
+- **错误地址**：`0x602000000010`，尝试读取 2 字节数据
+- **触发条件**：`klee-replay` 自动根据 `.ktest` 文件重建了符号化输入环境，包括命令行参数（空字符串 `""`）、文件 A（8 字节）、标准输入（8 字节）和标准输出缓冲区（1024 字节）
+
+通过这种方式，可以在原生环境中精确复现 KLEE 发现的内存错误，并利用 ASan 的详细诊断信息（如完整的调用栈、内存分配/释放历史等）进行深入分析和修复。
+
+### 3.7 测试监控与结果分析
+
+#### 3.7.1 监控和统计
 
 **实时查看统计信息：**
 ```bash
@@ -407,7 +503,7 @@ $ watch -n 5 'klee-stats klee-last'
 - `Instrs` = “跑了多少步”（实际执行量，动态）。
 - `ICount` = “赛道有多长”（代码体量，静态）。
 
-#### 3.6.2 高级可视化分析
+#### 3.7.2 高级可视化分析
 
 **使用KCachegrind进行指令级分析：**
 ```bash
@@ -434,7 +530,7 @@ $ kcachegrind klee-last/run.istats
 - **QueriesInvalid (Qiv)**：无效查询。
 - **QueryTime (Qtime)**：查询求解花费的时间百分比。
 
-#### 3.6.3 测试用例深度分析
+#### 3.7.3 测试用例深度分析
 
 **测试用例文件结构：**
 ```bash
@@ -471,7 +567,7 @@ object    2: size: 144
 object    2: data: ...
 ```
 
-#### 3.6.4 测试用例重放和验证
+#### 3.7.4 测试用例重放和验证
 
 **重放到gcov版本程序：**
 ```bash
@@ -492,7 +588,7 @@ KTEST_FILE=../../obj-llvm/src/klee-last/test000002.ktest
 ...
 ```
 
-#### 3.6.5 覆盖率测量和分析
+#### 3.7.5 覆盖率测量和分析
 
 **生成gcov覆盖率报告：**
 ```bash
@@ -521,7 +617,7 @@ $ cat echo.c.gcov
 - **#####**: 该行从未被执行（未覆盖）
 - **-**: 空行或注释行
 
-#### 3.6.6 高级覆盖率分析
+#### 3.7.6 高级覆盖率分析
 
 **使用zcov生成HTML覆盖率报告：**
 ```bash
@@ -542,7 +638,7 @@ $ genhtml coverage.info --output-directory coverage_html
 $ firefox coverage_html/index.html
 ```
 
-#### 3.6.7 错误和异常分析
+#### 3.7.7 错误和异常分析
 
 **分析KLEE错误报告：**
 ```bash
@@ -563,7 +659,7 @@ $ ls klee-last/*.assert.err
 - **Use after free**: 释放后使用错误
 - **Memory leaks**: 内存泄漏
 
-#### 3.6.8 符号执行状态分析
+#### 3.7.8 符号执行状态分析
 
 #### 3.13.1 单次（最新）结果比较和分析
 
