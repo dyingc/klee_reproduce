@@ -1,0 +1,106 @@
+# 让同一配方用同一个 shell
+SHELL := /bin/bash
+.ONESHELL:
+
+# 使用的编译器
+CC := clang
+
+# 生成 LLVM bitcode 的编译参数：
+# -emit-llvm 生成 LLVM 输出；-c 只编译不链接；
+# 其他宏/选项保持与原配置一致
+BC_CFLAGS := -O1 -Xclang -disable-llvm-passes \
+             -D__NO_STRING_INLINES -D_FORTIFY_SOURCE=0 -U__OPTIMIZE__ \
+             -emit-llvm -c
+
+# AddressSanitizer 配置（用于本地 ASAN 运行调试）
+ASAN_CFLAGS := -fsanitize=address -g -O0
+
+# 运行 KLEE 的沙盒目录与环境文件
+RUN_IN_DIR := /tmp/sandbox
+ENV_FILE   := $(RUN_IN_DIR)/test.env
+
+# KLEE 运行参数（使用 uclibc 和 POSIX runtime）
+TIMEOUT := 30min
+KLEE_RUN_FLAGS := --libc=uclibc --posix-runtime \
+                  --env-file=$(ENV_FILE) --run-in-dir=$(RUN_IN_DIR) \
+                  --max-time=$(TIMEOUT) --optimize --only-output-states-covering-new
+
+# KLEE 符号化参数：符号参数/文件/标准输入输出等
+BC_FLAGS := # --sym-args 0 1 10 --sym-args 0 2 2 \
+            # --sym-files 1 8 --sym-stdin 8 --sym-stdout
+
+# KLEE 头文件目录与可执行路径
+KLEE_INCLUDE   := /home/klee/klee_src/include
+KLEE           := /home/klee/klee_build/bin/klee
+
+# 源码与编译产物目录（Coreutils 示例）
+SOURCE_FOLDER   := /home/klee/coreutils-6.11/src
+LLVM_SRC_FOLDER := /home/klee/coreutils-6.11/obj-llvm/src
+
+# 题目/目标程序命名
+PROD           := echo
+MODIFIED       := challenge3
+CHALLENGE_NAME := $(PROD)_$(MODIFIED)
+
+# 各类文件路径
+SOURCE_FILE  := $(SOURCE_FOLDER)/$(CHALLENGE_NAME).c
+HARNESS_FILE := $(SOURCE_FOLDER)/$(CHALLENGE_NAME)_harness.c
+SOURCE_BC    := $(LLVM_SRC_FOLDER)/$(CHALLENGE_NAME).bc
+HARNESS_BC   := $(LLVM_SRC_FOLDER)/harness.bc
+FINAL_BC     := $(LLVM_SRC_FOLDER)/final.bc
+ASAN_EXE     := $(LLVM_SRC_FOLDER)/$(CHALLENGE_NAME)_asan
+
+# 默认目标：编译并运行 KLEE
+.PHONY: all
+all: run
+
+# 生成被测程序的 LLVM bitcode
+$(SOURCE_BC): $(SOURCE_FILE)
+	@mkdir -p $(LLVM_SRC_FOLDER)
+	$(CC) $(BC_CFLAGS) -Dmain=$(PROD)_entry $(SOURCE_FILE) -o $(SOURCE_BC)
+
+# 生成 harness 的 LLVM bitcode
+$(HARNESS_BC): $(HARNESS_FILE)
+	@mkdir -p $(LLVM_SRC_FOLDER)
+	$(CC) $(BC_CFLAGS) -I$(KLEE_INCLUDE) $(HARNESS_FILE) -o $(HARNESS_BC)
+
+# 链接 bitcode，得到最终供 KLEE 使用的 bitcode
+$(FINAL_BC): $(SOURCE_BC) $(HARNESS_BC)
+	@mkdir -p $(LLVM_SRC_FOLDER)
+	llvm-link $(SOURCE_BC) $(HARNESS_BC) -o $(FINAL_BC)
+
+# 生成 ASAN 可执行文件，用于本地动态检测（非 KLEE 路径）
+.PHONY: asan
+asan: $(SOURCE_FILE)
+	@mkdir -p $(LLVM_SRC_FOLDER)
+	$(CC) $(ASAN_CFLAGS) $(SOURCE_FILE) -o $(ASAN_EXE)
+
+# 准备运行时沙盒与环境变量文件
+.PHONY: env
+env:
+	@# 创建沙盒测试环境目录
+	@mkdir -p $(RUN_IN_DIR)
+
+	@# 创建环境变量文件
+	@cat > $(ENV_FILE) <<-'EOF'
+		PATH=/usr/bin:/bin
+		HOME=$(RUN_IN_DIR)
+		PWD=$(RUN_IN_DIR)
+	EOF
+
+# 使用 KLEE 运行（依赖 final.bc 与环境准备）
+.PHONY: run
+run: $(FINAL_BC) env
+	$(KLEE) $(KLEE_RUN_FLAGS) $(FINAL_BC) $(BC_FLAGS)
+
+# 清理构建产物与 KLEE 输出
+.PHONY: clean
+clean:
+	@echo "Cleaning $(LLVM_SRC_FOLDER) …"
+	@rm -rf \
+		$(SOURCE_BC) \
+		$(HARNESS_BC) \
+		$(FINAL_BC) \
+		$(ASAN_EXE) \
+		$(LLVM_SRC_FOLDER)/klee-* \
+		$(LLVM_SRC_FOLDER)/klee-last

@@ -365,15 +365,19 @@ $ klee --libc=uclibc --posix-runtime \
     -   -- → 分隔符
     -   --parallel=1 → 传递给 sort 程序，用于禁用多线程（KLEE 不支持线程）。
 
-### 3.6 附加测试（以 echo_challenge2.c 为例）
+### 3.6 附加测试（以 echo_challenge<x>.c 为例）
 
-#### 3.6.1 编译 echo_challenge2.bc
+#### 3.6.1 编译 echo_challenge<x>.bc
 
-在容器里（或主机映射到容器）使 `/home/klee/coreutils-6.11/obj-llvm/src/echo_challenge2.c` 可见，然后：
+在容器里（或主机映射到容器）使 `/home/klee/coreutils-6.11/obj-llvm/src/echo_challenge<x>.c` 可见，然后：
 
 ```bash
+VER=6.11
+PROD="echo"
+MODIFIED_PROD="${PROD}_challenge<x>"
+
 # 进入 Coreutils 工作目录
-cd /home/klee/coreutils-6.11
+cd /home/klee/coreutils-${VER}
 
 # 创建沙盒测试环境
 mkdir -p /tmp/sandbox
@@ -388,10 +392,10 @@ EOF
 # 直接编译 bitcode（保留 KLEE 官方教程建议的编译选项习惯）
 clang -O1 -Xclang -disable-llvm-passes \
   -D__NO_STRING_INLINES -D_FORTIFY_SOURCE=0 -U__OPTIMIZE__ \
-  -emit-llvm -c src/echo_challenge2.c -o obj-llvm/src/echo_challenge2.bc
+  -emit-llvm -c src/${MODIFIED_PROD}.c -o obj-llvm/src/${MODIFIED_PROD}.bc
 
 # 编译一个 ASan 原生可执行文件，便于对照回放/崩溃现场
-clang -fsanitize=address -g -O0 src/echo_challenge2.c -o obj-llvm/src/echo_challenge2_asan
+clang -fsanitize=address -g -O0 src/${MODIFIED_PROD}.c -o obj-llvm/src/${MODIFIED_PROD}_asan
 ```
 
 说明：
@@ -400,14 +404,14 @@ clang -fsanitize=address -g -O0 src/echo_challenge2.c -o obj-llvm/src/echo_chall
 - 保留 `-O1 -Xclang -disable-llvm-passes` 的组合，避免 `-O0` 带来的 optnone 影响；同时去掉安全替换（`__fprintf_chk` 等）以匹配 KLEE 的建模习惯。
 - 你已有的 Coreutils 树与 Docker 环境无需改 build system；适合"挑战程序"独立编译。
 
-#### 3.6.2 测试 echo_challenge2 工具：
+#### 3.6.2 测试 echo_challenge<x> 工具：
 
 ```bash
-cd /home/klee/coreutils-6.11/obj-llvm/src
+cd /home/klee/coreutils-${VER}/obj-llvm/src
 klee --libc=uclibc --posix-runtime \
     --env-file=/tmp/sandbox/test.env --run-in-dir=/tmp/sandbox \
     --max-time=1min --optimize --only-output-states-covering-new \
-    ./echo_challenge2.bc \
+    ./${MODIFIED_PROD}.bc \
     --sym-args 0 1 10 --sym-args 0 2 2 \
     --sym-files 1 8 --sym-stdin 8 --sym-stdout
 ```
@@ -442,7 +446,7 @@ KLEE: done: generated tests = 24
 $ ktest-tool klee-last/test000006.ktest
 
 # 使用 klee-replay 在 ASan 版本上重现错误
-$ klee-replay ./echo_challenge2_asan klee-last/test000006.ktest
+$ klee-replay ./${MODIFIED_PROD}_asan klee-last/test000006.ktest
 KLEE-REPLAY: NOTE: Test file: klee-last/test000006.ktest
 KLEE-REPLAY: NOTE: Arguments: "./echo_challenge2_asan" ""
 KLEE-REPLAY: NOTE: Storing KLEE replay files in /tmp/klee-replay-j9YDY3
@@ -471,7 +475,7 @@ READ of size 2 at 0x602000000010 thread T0
 $ klee-stats klee-last
 
 # 持续监控（每5秒更新）
-$ watch -n 5 'klee-stats klee-last'
+$ watch -n 5 -d 'klee-stats klee-last'
 ```
 
 **典型统计信息含义：**
