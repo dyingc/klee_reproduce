@@ -437,7 +437,51 @@ KLEE: done: generated tests = 24
 可以看到，KLEE 在自动探索时检测到了 use-after-free 等内存错误，并为其生成了对应的 .ktest 文件。
 随后，你可以使用 ktest-tool 查看具体输入，或用 klee-replay 在编译好的原生 echo_challenge2 上重现问题。
 
-#### 3.6.3 使用 ASan 版本重现错误
+#### 3.6.3 使用 Makefile
+
+对于 `echo_challeng3.c`，有一个已经准备好的 Makefile，用法如下：
+
+```bash
+# 1) 默认运行（无环境变量开关）—— 小规模、快速探测
+make -f /home/klee/coreutils-6.11/Makefile_echo_challenge3 clean && make -f /home/klee/coreutils-6.11/Makefile_echo_challenge3 run
+
+# 2) 模糊连接（Obscure join）—— 关注尺寸计算与转义交互的路径
+make -f /home/klee/coreutils-6.11/Makefile_echo_challenge3 clean && make -f /home/klee/coreutils-6.11/Makefile_echo_challenge3 run KLEE_ENV="ECHO_JOIN=1"
+
+# 3) 当你看到 completed paths > 0 且开始生成测试用例时，进行第三轮运行，聚焦于标准输出缓冲（stdio buffering）
+make -f /home/klee/coreutils-6.11/Makefile_echo_challenge3 clean && make -f /home/klee/coreutils-6.11/Makefile_echo_challenge3 run KLEE_ENV="ECHO_BUF=1 ECHO_HINT=64"
+```
+
+#### 3.6.4 KCachegrind
+
+对于 `echo_challenge3.c`，我们可以使用 `KCachegrind` 来进行指令级分析：
+
+- 使用 KCachegrind 打开 `run.istats`，查看哪些函数仍未被覆盖；如果发现 `join_args_obscure` 的覆盖率仍然很低，就说明需要继续保持 `ECHO_JOIN=1`，并逐步增加 `ARG_LEN` 的长度（例如从 24 → 48 → 96）来扩大输入空间。
+- 如果你已经进入了转义路径（`-e`）但没有进一步进展：去掉 `a2` 的“仅限可打印字符”限制，允许反斜杠和高位字节出现，以便触发 `append_escaped` 的各种边界情况（第二轮实验时使用）。
+KLEE 的内置函数 `klee_prefer_cex` 可以在需要时让解出的输入更倾向于可读字符，但它会带来一定开销——只是一个可选的优化手段，不是必须使用的。
+
+```bash
+# 启动KCachegrind查看详细性能分析
+$ kcachegrind /home/klee/coreutils-6.11/obj-llvm/src/klee-last/run.istats
+```
+
+**KCachegrind中的关键指标：**
+- **Incl.（Inclusive）**：包含该函数自身以及它调用的函数的占比。
+- **Self**：仅该函数自身的占比（不含被调函数）。
+- **Called**：函数被调用次数。
+- **Function**：函数名称。
+
+
+- **CoveredInstructions (lcov)**：被执行的指令百分比。
+- **Forks**：路径分叉次数。
+- **Instructions (I)**：总指令数占比。
+- **Queries / QueriesValid / QueriesInvalid**：KLEE 与 SMT 求解器交互的次数。
+- **Queries (Q)**：总查询次数。
+- **QueriesValid (Qv)**：有效查询。
+- **QueriesInvalid (Qiv)**：无效查询。
+- **QueryTime (Qtime)**：查询求解花费的时间百分比。
+
+#### 3.6.5 使用 ASan 版本重现错误
 
 为了获得更详细的崩溃信息和调试上下文，可以使用 `klee-replay` 工具配合 ASan 版本的可执行文件来重现 KLEE 发现的错误：
 

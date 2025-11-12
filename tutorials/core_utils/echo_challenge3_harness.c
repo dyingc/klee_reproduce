@@ -28,22 +28,24 @@ static void make_sym_cstr(char *buf, size_t n, const char *name, int printable_o
 
 int main(void) {
     /* -------- 1) 环境 gate 开关（小而可控） -------- */
-    int g_join   = sym_toggle("tog_ECHO_JOIN");   // 控制走“obscure join”路径
+    /*int g_join   = sym_toggle("tog_ECHO_JOIN");   // 控制走“obscure join”路径
     int g_buf    = sym_toggle("tog_ECHO_BUF");    // 是否自定义stdout缓冲
     int g_opt    = sym_toggle("tog_ECHO_OPT");    // 是否触发 optimizer
     int g_clean  = sym_toggle("tog_ECHO_CLEAN");  // cleanup 风格
     int g_strict = sym_toggle("tog_ECHO_STRICT"); // 二次释放/严格清理
     int g_hint   = sym_toggle("tog_ECHO_HINT");   // 是否提供buffer hint
+    int g_join   = 1;   // 控制走“obscure
 
     if (g_join)   setenv("ECHO_JOIN",   "1", 1);
     if (g_buf)    setenv("ECHO_BUF",    "1", 1);   // 非"0"生效
     if (g_opt)    setenv("ECHO_OPT",    "1", 1);
     if (g_clean)  setenv("ECHO_CLEAN",  "1", 1);
     if (g_strict) setenv("ECHO_STRICT", "1", 1);
-    if (g_hint)   setenv("ECHO_HINT",   "128", 1); // 给个中等大小提示，可调
+    if (g_hint)   setenv("ECHO_HINT",   "128", 1); // 给个中等大小提示，可调 */ // 先全开，后续再调整
 
     /* -------- 2) 构造 argv：固定最多3个参数，含1个可能是选项 -------- */
-    enum { MAX_ARGS = 3, ARG_LEN = 32 };
+    // enum { MAX_ARGS = 3, ARG_LEN = 32 };
+    enum { MAX_ARGS = 3, ARG_LEN = 48 }; // 调试时先缩小规模
     char a0[] = "./echo_challenge3";              // 程序名具体化
     static char a1[ARG_LEN], a2[ARG_LEN], a3[ARG_LEN];
 
@@ -52,20 +54,28 @@ int main(void) {
     unsigned char kind;
     klee_make_symbolic(&kind, sizeof(kind), "arg0_kind");
     kind %= 5; // 0..4 五种形态
+    kind %= 3; // 0..2 三种形态，调试时先缩小规模
 
+    //switch (kind) {
+    //    case 0: strcpy(a1, "-e"); break;
+    //    case 1: strcpy(a1, "-E"); break;
+    //    default:
+    //        make_sym_cstr(a1, ARG_LEN, "arg1_str", /*printable_only=*/1);
+    //        break;
+    //}
     switch (kind) {
         case 0: strcpy(a1, "-n"); break;
         case 1: strcpy(a1, "-e"); break;
         case 2: strcpy(a1, "-E"); break;
         case 3: strcpy(a1, "--"); break;     // 终止选项，后面全是字符串
         default:
-            make_sym_cstr(a1, ARG_LEN, "arg1_str", /*printable_only=*/1);
+            make_sym_cstr(a1, ARG_LEN, "arg1_str", /*printable_only=*/0); // 放开，允许不可打印字符
             break;
     }
 
     // 另外两个参数纯符号字符串，先限定可打印；后续若需要可放开
     make_sym_cstr(a2, ARG_LEN, "arg2_str", 1);
-    make_sym_cstr(a3, ARG_LEN, "arg3_str", 1);
+    make_sym_cstr(a3, ARG_LEN, "arg3_str", 0); // 放开，允许不可打印字符
 
     // 决定实际 argv 个数（再用一个小开关）
     unsigned char ac;

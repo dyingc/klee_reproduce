@@ -1,3 +1,11 @@
+# Make the run narrower (split gates across separate runs)
+# Try the following one by one
+# make run KLEE_ENV="ECHO_JOIN=1"
+# make run KLEE_ENV="ECHO_BUF=1 ECHO_HINT=64"
+# make run KLEE_ENV="ECHO_OPT=1"
+
+KLEE_ENV ?=
+
 # 让同一配方用同一个 shell
 SHELL := /bin/bash
 .ONESHELL:
@@ -20,13 +28,22 @@ RUN_IN_DIR := /tmp/sandbox
 ENV_FILE   := $(RUN_IN_DIR)/test.env
 
 # KLEE 运行参数（使用 uclibc 和 POSIX runtime）
-TIMEOUT := 30min
+TIMEOUT := 60min
 KLEE_RUN_FLAGS := --libc=uclibc --posix-runtime \
                   --env-file=$(ENV_FILE) --run-in-dir=$(RUN_IN_DIR) \
                   --max-time=$(TIMEOUT) --optimize --only-output-states-covering-new
+# Additional search options
+# MD2U: pulls the search toward uncovered code, helps “break out” of the already-visited zones.
+# Random-path: helps explore different paths, especially in programs with many branches.
+# Batching: reduces per-instruction state switching and curbs fork churn.
+KLEE_RUN_FLAGS += --search=random-path --search=nurs:md2u \
+                  --use-batching-search --batch-instructions=8000 \
+                  --max-solver-time=15s
+# Memory limit for KLEE itself (not the generated program)
+KLEE_RUN_FLAGS += --max-memory=4096
 
 # KLEE 符号化参数：符号参数/文件/标准输入输出等
-BC_FLAGS := # --sym-args 0 1 10 --sym-args 0 2 2 \
+BC_FLAGS := # -fd-fail # --sym-args 0 1 10 --sym-args 0 2 2 \
             # --sym-files 1 8 --sym-stdin 8 --sym-stdout
 
 # KLEE 头文件目录与可执行路径
@@ -101,6 +118,6 @@ clean:
 		$(SOURCE_BC) \
 		$(HARNESS_BC) \
 		$(FINAL_BC) \
-		$(ASAN_EXE) \
-		$(LLVM_SRC_FOLDER)/klee-* \
-		$(LLVM_SRC_FOLDER)/klee-last
+		$(ASAN_EXE)
+		# $(LLVM_SRC_FOLDER)/klee-* \
+		# $(LLVM_SRC_FOLDER)/klee-last
